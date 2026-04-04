@@ -29,5 +29,8 @@ longrun-prompt "为 monorepo 重构生成 orchestrator prompt"
 ## 说明
 
 - `longrun` / `longrun-resume` 默认 detached，更适合无人值守长跑。
+- 这几个 shell 包装器本质上会在**当前目录**里转发到 GitHub Copilot CLI；例如 `longrun "<任务描述>"` 最终会组装成类似：`copilot --autopilot --yolo --no-ask-user -p "/longrun <任务描述>"`。
+- 如需确认 launcher 的实际命令，可运行：`copilot-longrun run --dry-run "<任务描述>"`。
+- detached 模式从 `v0.6.1` 起改为使用 `screen` 提供 pseudo-terminal；这样 Copilot CLI 才能稳定在后台创建 `.copilot-mission-control/runs/*` 状态。
 - 如果你当前就在本仓库目录运行，即使没有执行 `copilot plugin install`，launcher 也会自动把当前仓库作为 `--plugin-dir` 加载到 Copilot CLI。
 - 如果你要把 `/longrun` 作为真正的 slash command 暴露给某个宿主，需要该宿主本身支持自定义 slash command；LongRun 已经把后端命令统一成稳定的 shell contract。
