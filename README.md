@@ -112,6 +112,13 @@ copilot-longrun doctor
 - 是否已经安装 shell wrappers
 - 是否安装并登录了 **`gh`**（仅在 push/PR/仓库管理时需要）
 
+如果某些 IDE / agent 的沙箱环境没有继承你平时终端的 `PATH`，即使你已经安装过 CLI，也可能出现“检测不到”的情况。此时可以显式指定二进制路径：
+
+```bash
+export COPILOT_BIN=/absolute/path/to/copilot
+export GH_BIN=/absolute/path/to/gh
+```
+
 ### 必需登录
 
 ```bash

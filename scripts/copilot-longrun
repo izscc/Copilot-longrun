@@ -80,17 +80,57 @@ find_bin() {
   return 1
 }
 
+find_bin_from_common_locations() {
+  local name="$1"
+  local path
+
+  for path in \
+    "$HOME/.local/bin/$name" \
+    "/opt/homebrew/bin/$name" \
+    "/usr/local/bin/$name" \
+    "$HOME/.volta/bin/$name" \
+    "$HOME/.npm-global/bin/$name" \
+    "$HOME/.local/share/pnpm/$name" \
+    "$HOME/Library/pnpm/$name" \
+    "$HOME/.asdf/shims/$name" \
+    "$HOME/bin/$name"
+  do
+    [ -x "$path" ] && { printf '%s\n' "$path"; return 0; }
+  done
+
+  if command -v npm >/dev/null 2>&1; then
+    path="$(npm prefix -g 2>/dev/null || true)"
+    [ -n "$path" ] && [ -x "$path/bin/$name" ] && { printf '%s\n' "$path/bin/$name"; return 0; }
+  fi
+
+  if command -v pnpm >/dev/null 2>&1; then
+    path="$(pnpm bin -g 2>/dev/null || true)"
+    [ -n "$path" ] && [ -x "$path/$name" ] && { printf '%s\n' "$path/$name"; return 0; }
+  fi
+
+  if command -v brew >/dev/null 2>&1; then
+    path="$(brew --prefix 2>/dev/null || true)"
+    [ -n "$path" ] && [ -x "$path/bin/$name" ] && { printf '%s\n' "$path/bin/$name"; return 0; }
+  fi
+
+  for path in "$HOME"/.nvm/versions/node/*/bin/"$name"; do
+    [ -x "$path" ] && { printf '%s\n' "$path"; return 0; }
+  done
+
+  return 1
+}
+
 copilot_path() {
-  find_bin "$COPILOT_BIN" "$HOME/.local/bin/copilot" "/opt/homebrew/bin/copilot" "/usr/local/bin/copilot"
+  find_bin "$COPILOT_BIN" || find_bin_from_common_locations copilot
 }
 
 gh_path() {
-  find_bin "$GH_BIN" "$HOME/.local/bin/gh" "/opt/homebrew/bin/gh" "/usr/local/bin/gh"
+  find_bin "$GH_BIN" || find_bin_from_common_locations gh
 }
 
 require_copilot() {
   COPILOT_REAL_BIN="$(copilot_path || true)"
-  [ -n "$COPILOT_REAL_BIN" ] || die "copilot CLI not found. Install it first: curl -fsSL https://gh.io/copilot-install | PREFIX=\"$HOME/.local\" bash"
+  [ -n "$COPILOT_REAL_BIN" ] || die "copilot CLI not found. Install it first: curl -fsSL https://gh.io/copilot-install | PREFIX=\"$HOME/.local\" bash (or set COPILOT_BIN=/absolute/path/to/copilot)"
 }
 
 copilot_version() {
@@ -279,6 +319,7 @@ BANNER
   else
     fail "未找到 Copilot CLI"
     info "     安装：curl -fsSL https://gh.io/copilot-install | PREFIX=\"$HOME/.local\" bash"
+    info "     或显式指定：export COPILOT_BIN=/absolute/path/to/copilot"
     issues=$((issues + 1))
   fi
 
@@ -324,10 +365,12 @@ BANNER
     else
       warn "GitHub CLI 尚未登录（仅在 push/PR/仓库管理时需要）"
       info "     登录：gh auth login --web --hostname github.com --git-protocol https"
+      info "     如检测失败也可显式指定：export GH_BIN=/absolute/path/to/gh"
     fi
   else
     warn "未找到 GitHub CLI gh（可选）"
     info "     仅当你需要 push/PR/仓库管理时再安装 gh"
+    info "     如已安装但检测不到：export GH_BIN=/absolute/path/to/gh"
   fi
 
   printf '\n建议启动方式：\n'
