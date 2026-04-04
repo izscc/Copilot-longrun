@@ -1,0 +1,29 @@
+{
+  "name": "copilot-mission-control",
+  "description": "Long-running mission orchestration for GitHub Copilot CLI using skills, custom agents, and hooks.",
+  "version": "0.3.0",
+  "author": {
+    "name": "zscc.in",
+    "url": "https://github.com/zscc"
+  },
+  "license": "MIT",
+  "keywords": [
+    "github-copilot-cli",
+    "autopilot",
+    "agent",
+    "skills",
+    "orchestration",
+    "long-running",
+    "prompt-generator",
+    "template-library"
+  ],
+  "category": "Productivity",
+  "tags": [
+    "autopilot",
+    "yolo",
+    "mission-control"
+  ],
+  "agents": "agents/",
+  "skills": "skills/",
+  "hooks": "hooks.json"
+}
