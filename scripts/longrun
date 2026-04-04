@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+resolve_script_dir() {
+  local source="${BASH_SOURCE[0]}"
+  while [ -L "$source" ]; do
+    local dir
+    dir="$(cd -P "$(dirname "$source")" && pwd)"
+    source="$(readlink "$source")"
+    [[ "$source" != /* ]] && source="$dir/$source"
+  done
+  cd -P "$(dirname "$source")" && pwd
+}
+SCRIPT_DIR="$(resolve_script_dir)"
+exec "$SCRIPT_DIR/copilot-longrun" run --detach "$@"

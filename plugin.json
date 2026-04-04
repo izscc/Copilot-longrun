@@ -1,7 +1,7 @@
 {
   "name": "copilot-mission-control",
-  "description": "Long-running mission orchestration for GitHub Copilot CLI using skills, custom agents, and hooks.",
-  "version": "0.3.0",
+  "description": "LongRun bridges GitHub Copilot CLI with skills, hooks, and cross-agent launchers so one prompt can drive resumable long-running missions.",
+  "version": "0.6.0",
   "author": {
     "name": "zscc.in",
     "url": "https://github.com/zscc"
@@ -15,7 +15,14 @@
     "orchestration",
     "long-running",
     "prompt-generator",
-    "template-library"
+    "template-library",
+    "bare-commands",
+    "cross-agent-launcher",
+    "bridge",
+    "doctor",
+    "wrapper-commands",
+    "codex",
+    "claude-code"
   ],
   "category": "Productivity",
   "tags": [

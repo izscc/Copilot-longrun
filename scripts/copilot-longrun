@@ -1,0 +1,465 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PLUGIN_NAME="copilot-mission-control"
+DEFAULT_COPILOT_BIN="copilot"
+DEFAULT_GH_BIN="gh"
+DEFAULT_MAX_CONTINUES="${COPILOT_LONGRUN_MAX_CONTINUES:-100}"
+LAUNCHER_DIR_NAME=".copilot-mission-control/launcher"
+PLUGIN_REPO_SLUG="izscc/Copilot-longrun"
+
+resolve_script_dir() {
+  local source="${BASH_SOURCE[0]}"
+  while [ -L "$source" ]; do
+    local dir
+    dir="$(cd -P "$(dirname "$source")" && pwd)"
+    source="$(readlink "$source")"
+    [[ "$source" != /* ]] && source="$dir/$source"
+  done
+  cd -P "$(dirname "$source")" && pwd
+}
+
+SCRIPT_DIR="$(resolve_script_dir)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+COPILOT_BIN="${COPILOT_BIN:-$DEFAULT_COPILOT_BIN}"
+GH_BIN="${GH_BIN:-$DEFAULT_GH_BIN}"
+COPILOT_CONFIG_DIR="${COPILOT_CONFIG_DIR:-$HOME/.copilot}"
+
+usage() {
+  cat <<'USAGE'
+LongRun 让你的Copilot Pro权益得到最大化的价值呈现！
+开发者：zscc.in 知识船仓·公益社区。
+
+Usage:
+  copilot-longrun run [--detach] [--max-continues N] [--model MODEL] [--dry-run] <task>
+  copilot-longrun prompt [--model MODEL] [--dry-run] <task>
+  copilot-longrun resume [--detach] [--max-continues N] [--model MODEL] [--dry-run] [run-id|latest]
+  copilot-longrun status [--model MODEL] [--dry-run] [run-id|latest]
+  copilot-longrun doctor
+  copilot-longrun help
+
+Description:
+  Host-agnostic launcher that forwards longrun commands into GitHub Copilot CLI.
+  It prefers bare skills (/longrun) when installed under ~/.copilot/skills,
+  otherwise it falls back to plugin-qualified commands, and if needed it can
+  load the current repository as a local plugin source via --plugin-dir.
+
+Examples:
+  copilot-longrun doctor
+  copilot-longrun run --detach "调研中国 OPC 项目并形成报告"
+  copilot-longrun prompt "为 monorepo 重构生成 Copilot orchestrator prompt"
+  copilot-longrun resume latest
+  copilot-longrun status latest
+USAGE
+}
+
+info() { printf '%s\n' "$*"; }
+ok() { printf '[OK] %s\n' "$*"; }
+warn() { printf '[WARN] %s\n' "$*"; }
+fail() { printf '[FAIL] %s\n' "$*"; }
+
+die() {
+  printf 'Error: %s\n' "$*" >&2
+  printf 'Hint: run `copilot-longrun doctor` for a guided environment check.\n' >&2
+  exit 1
+}
+
+find_bin() {
+  local requested="$1"
+  shift || true
+  local candidate
+  if [[ "$requested" == */* ]]; then
+    [ -x "$requested" ] && { printf '%s\n' "$requested"; return 0; }
+  else
+    candidate="$(command -v "$requested" 2>/dev/null || true)"
+    [ -n "$candidate" ] && { printf '%s\n' "$candidate"; return 0; }
+  fi
+  for candidate in "$@"; do
+    [ -x "$candidate" ] && { printf '%s\n' "$candidate"; return 0; }
+  done
+  return 1
+}
+
+copilot_path() {
+  find_bin "$COPILOT_BIN" "$HOME/.local/bin/copilot" "/opt/homebrew/bin/copilot" "/usr/local/bin/copilot"
+}
+
+gh_path() {
+  find_bin "$GH_BIN" "$HOME/.local/bin/gh" "/opt/homebrew/bin/gh" "/usr/local/bin/gh"
+}
+
+require_copilot() {
+  COPILOT_REAL_BIN="$(copilot_path || true)"
+  [ -n "$COPILOT_REAL_BIN" ] || die "copilot CLI not found. Install it first: curl -fsSL https://gh.io/copilot-install | PREFIX=\"$HOME/.local\" bash"
+}
+
+copilot_version() {
+  "$COPILOT_REAL_BIN" --version 2>/dev/null | head -n 1 || true
+}
+
+copilot_config_json() {
+  printf '%s/config.json\n' "$COPILOT_CONFIG_DIR"
+}
+
+plugin_name_matches() {
+  local json_file="$1"
+  [ -f "$json_file" ] || return 1
+  python3 - "$json_file" "$PLUGIN_NAME" <<'PY'
+import json, sys
+from pathlib import Path
+obj = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+raise SystemExit(0 if obj.get('name') == sys.argv[2] else 1)
+PY
+}
+
+has_local_plugin_source() {
+  plugin_name_matches "$REPO_ROOT/plugin.json"
+}
+
+installed_plugin_root() {
+  local plugin_dir="$COPILOT_CONFIG_DIR/installed-plugins"
+  [ -d "$plugin_dir" ] || return 1
+  while read -r f; do
+    if plugin_name_matches "$f"; then
+      dirname "$f"
+      return 0
+    fi
+  done < <(find "$plugin_dir" -maxdepth 4 -type f -name plugin.json 2>/dev/null)
+  return 1
+}
+
+has_personal_skill() {
+  local name="$1"
+  [ -d "$HOME/.copilot/skills/$name" ] || [ -L "$HOME/.copilot/skills/$name" ] || [ -d "$HOME/.agents/skills/$name" ] || [ -L "$HOME/.agents/skills/$name" ]
+}
+
+all_bare_skills_installed() {
+  has_personal_skill longrun && has_personal_skill longrun-prompt && has_personal_skill longrun-resume && has_personal_skill longrun-status
+}
+
+detect_copilot_login() {
+  if [ -n "${COPILOT_GITHUB_TOKEN:-}" ]; then
+    printf 'env:COPILOT_GITHUB_TOKEN\n'
+    return 0
+  fi
+  if [ -n "${GH_TOKEN:-}" ]; then
+    printf 'env:GH_TOKEN\n'
+    return 0
+  fi
+  if [ -n "${GITHUB_TOKEN:-}" ]; then
+    printf 'env:GITHUB_TOKEN\n'
+    return 0
+  fi
+
+  local config_json
+  config_json="$(copilot_config_json)"
+  [ -f "$config_json" ] || return 1
+  python3 - "$config_json" <<'PY'
+import json, sys
+from pathlib import Path
+obj = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+last = obj.get('last_logged_in_user') or {}
+login = last.get('login')
+host = last.get('host')
+if login:
+    print(f"{login}@{host or 'https://github.com'}")
+    raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
+detect_gh_login() {
+  local gh_bin
+  gh_bin="$(gh_path || true)"
+  [ -n "$gh_bin" ] || return 1
+  local status
+  status="$($gh_bin auth status -h github.com 2>&1 || true)"
+  if printf '%s' "$status" | grep -qi 'Logged in to github.com account'; then
+    printf '%s\n' "$status" | sed -n 's/.*Logged in to github.com account \([^ ]*\).*/\1/p' | head -n 1
+    return 0
+  fi
+  return 1
+}
+
+plugin_install_hint() {
+  printf 'copilot plugin install %s\n' "$PLUGIN_REPO_SLUG"
+}
+
+shell_join() {
+  local out=""
+  local arg
+  for arg in "$@"; do
+    out+="$(printf '%q' "$arg") "
+  done
+  printf '%s\n' "${out% }"
+}
+
+write_meta() {
+  local path="$1"
+  local subcommand="$2"
+  local payload="$3"
+  local log_file="$4"
+  local pid="$5"
+  local mode="$6"
+  python3 - "$path" "$subcommand" "$payload" "$log_file" "$pid" "$mode" <<'PY'
+import json, os, sys
+from datetime import datetime, timezone
+from pathlib import Path
+path = Path(sys.argv[1])
+path.parent.mkdir(parents=True, exist_ok=True)
+obj = {
+    'startedAt': datetime.now(timezone.utc).isoformat(),
+    'cwd': os.getcwd(),
+    'subcommand': sys.argv[2],
+    'payload': sys.argv[3],
+    'logFile': sys.argv[4],
+    'pid': int(sys.argv[5]),
+    'skillResolution': sys.argv[6],
+}
+path.write_text(json.dumps(obj, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+PY
+}
+
+SKILL_MODE=""
+PLUGIN_ARGS=()
+RESOLVED_SKILL_REF=""
+
+resolve_skill_ref() {
+  local name="$1"
+  if has_personal_skill "$name"; then
+    SKILL_MODE="bare"
+    PLUGIN_ARGS=()
+    RESOLVED_SKILL_REF="/$name"
+    return 0
+  fi
+  if has_local_plugin_source; then
+    SKILL_MODE="local-plugin-dir"
+    PLUGIN_ARGS=("--plugin-dir" "$REPO_ROOT")
+    RESOLVED_SKILL_REF="/$PLUGIN_NAME:$name"
+    return 0
+  fi
+  local installed_root
+  installed_root="$(installed_plugin_root || true)"
+  if [ -n "$installed_root" ]; then
+    SKILL_MODE="installed-plugin"
+    PLUGIN_ARGS=()
+    RESOLVED_SKILL_REF="/$PLUGIN_NAME:$name"
+    return 0
+  fi
+  RESOLVED_SKILL_REF=""
+  return 1
+}
+
+preflight_or_die() {
+  require_copilot
+  COPILOT_LOGIN="$(detect_copilot_login || true)"
+  [ -n "$COPILOT_LOGIN" ] || die "Copilot CLI is not authenticated. Run: copilot login"
+}
+
+doctor() {
+  local issues=0
+  local copilot_bin="$(copilot_path || true)"
+  local gh_bin="$(gh_path || true)"
+  local copilot_login="$(detect_copilot_login || true)"
+  local gh_login="$(detect_gh_login || true)"
+  local installed_plugin="$(installed_plugin_root || true)"
+
+  cat <<'BANNER'
+LongRun 让你的Copilot Pro权益得到最大化的价值呈现！
+开发者：zscc.in 知识船仓·公益社区。
+BANNER
+  printf '\n'
+
+  if [ -n "$copilot_bin" ]; then
+    ok "Copilot CLI 已安装：$copilot_bin"
+    COPILOT_REAL_BIN="$copilot_bin"
+    local version
+    version="$(copilot_version)"
+    [ -n "$version" ] && info "     版本：$version"
+  else
+    fail "未找到 Copilot CLI"
+    info "     安装：curl -fsSL https://gh.io/copilot-install | PREFIX=\"$HOME/.local\" bash"
+    issues=$((issues + 1))
+  fi
+
+  if [ -n "$copilot_login" ]; then
+    ok "Copilot CLI 已登录：$copilot_login"
+  else
+    fail "Copilot CLI 尚未登录"
+    info "     登录：copilot login"
+    issues=$((issues + 1))
+  fi
+
+  if all_bare_skills_installed; then
+    ok "裸命令技能已安装：/longrun /longrun-prompt /longrun-resume /longrun-status"
+  else
+    warn "裸命令技能未全部安装"
+    info "     安装：bash $REPO_ROOT/scripts/install-bare-commands.sh"
+  fi
+
+  if has_local_plugin_source; then
+    ok "当前仓库可作为本地插件源：$REPO_ROOT"
+  else
+    warn "当前目录不是有效的 LongRun 插件源码根目录"
+  fi
+
+  if [ -n "$installed_plugin" ]; then
+    ok "Copilot CLI 已安装插件缓存：$installed_plugin"
+  else
+    warn "Copilot CLI 未检测到已安装插件缓存"
+    info "     安装：$(plugin_install_hint)"
+  fi
+
+  if [ -x "$HOME/.local/bin/copilot-longrun" ]; then
+    ok "全局 launcher 已安装：$HOME/.local/bin/copilot-longrun"
+  else
+    warn "全局 launcher 未安装"
+    info "     安装：bash $REPO_ROOT/scripts/install-global-launcher.sh"
+  fi
+
+  if [ -n "$gh_bin" ]; then
+    ok "GitHub CLI 已安装：$gh_bin"
+    if [ -n "$gh_login" ]; then
+      ok "GitHub CLI 已登录：$gh_login"
+    else
+      warn "GitHub CLI 尚未登录（仅在 push/PR/仓库管理时需要）"
+      info "     登录：gh auth login --web --hostname github.com --git-protocol https"
+    fi
+  else
+    warn "未找到 GitHub CLI gh（可选）"
+    info "     仅当你需要 push/PR/仓库管理时再安装 gh"
+  fi
+
+  printf '\n建议启动方式：\n'
+  info '  longrun "<任务描述>"                     # shell 包装器，默认 detached'
+  info '  copilot-longrun run --detach "<任务描述>"'
+  info '  longrun-status latest'
+  info '  longrun-resume latest'
+  printf '\n提示：launcher 已默认附带 --autopilot --yolo --no-ask-user，更适合长跑。\n'
+
+  [ "$issues" -eq 0 ]
+}
+
+subcmd="${1:-help}"
+shift || true
+
+case "$subcmd" in
+  help|-h|--help)
+    usage
+    exit 0
+    ;;
+  doctor)
+    doctor
+    exit $?
+    ;;
+esac
+
+preflight_or_die
+
+model=""
+max_continues="$DEFAULT_MAX_CONTINUES"
+detach=0
+dry_run=0
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --detach)
+      detach=1
+      shift
+      ;;
+    --dry-run)
+      dry_run=1
+      shift
+      ;;
+    --max-continues)
+      [ "$#" -ge 2 ] || die "--max-continues requires a value"
+      max_continues="$2"
+      shift 2
+      ;;
+    --model)
+      [ "$#" -ge 2 ] || die "--model requires a value"
+      model="$2"
+      shift 2
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      die "unknown option: $1"
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+payload=""
+cmd=("$COPILOT_REAL_BIN")
+
+case "$subcmd" in
+  run)
+    [ "$#" -ge 1 ] || die "run requires a task description"
+    resolve_skill_ref longrun || die "LongRun skill source not found. Run $(plugin_install_hint) or execute from the plugin repository checkout."
+    payload="$RESOLVED_SKILL_REF"
+    if [ ${#PLUGIN_ARGS[@]} -gt 0 ]; then cmd+=("${PLUGIN_ARGS[@]}"); fi
+    cmd+=("--autopilot" "--yolo" "--no-ask-user" "--max-autopilot-continues" "$max_continues")
+    [ -n "$model" ] && cmd+=("--model" "$model")
+    cmd+=("-p" "$payload $*")
+    ;;
+  prompt)
+    [ "$#" -ge 1 ] || die "prompt requires a task description"
+    resolve_skill_ref longrun-prompt || die "LongRun prompt skill source not found. Run $(plugin_install_hint) or execute from the plugin repository checkout."
+    payload="$RESOLVED_SKILL_REF"
+    if [ ${#PLUGIN_ARGS[@]} -gt 0 ]; then cmd+=("${PLUGIN_ARGS[@]}"); fi
+    cmd+=("--yolo" "--no-ask-user")
+    [ -n "$model" ] && cmd+=("--model" "$model")
+    cmd+=("-p" "$payload $*")
+    ;;
+  resume)
+    target="${1:-latest}"
+    resolve_skill_ref longrun-resume || die "LongRun resume skill source not found. Run $(plugin_install_hint) or execute from the plugin repository checkout."
+    payload="$RESOLVED_SKILL_REF"
+    if [ ${#PLUGIN_ARGS[@]} -gt 0 ]; then cmd+=("${PLUGIN_ARGS[@]}"); fi
+    cmd+=("--autopilot" "--yolo" "--no-ask-user" "--max-autopilot-continues" "$max_continues")
+    [ -n "$model" ] && cmd+=("--model" "$model")
+    cmd+=("-p" "$payload $target")
+    ;;
+  status)
+    target="${1:-latest}"
+    resolve_skill_ref longrun-status || die "LongRun status skill source not found. Run $(plugin_install_hint) or execute from the plugin repository checkout."
+    payload="$RESOLVED_SKILL_REF"
+    if [ ${#PLUGIN_ARGS[@]} -gt 0 ]; then cmd+=("${PLUGIN_ARGS[@]}"); fi
+    cmd+=("--yolo" "--no-ask-user")
+    [ -n "$model" ] && cmd+=("--model" "$model")
+    cmd+=("-p" "$payload $target")
+    ;;
+  *)
+    die "unknown subcommand: $subcmd"
+    ;;
+esac
+
+if [ "$dry_run" -eq 1 ]; then
+  shell_join "${cmd[@]}"
+  exit 0
+fi
+
+if [ "$detach" -eq 1 ]; then
+  launcher_dir="$PWD/$LAUNCHER_DIR_NAME"
+  mkdir -p "$launcher_dir"
+  ts="$(date +%Y%m%d-%H%M%S)"
+  log_file="$launcher_dir/${subcmd}-${ts}.log"
+  meta_file="$launcher_dir/${subcmd}-${ts}.json"
+  nohup "${cmd[@]}" >"$log_file" 2>&1 &
+  pid="$!"
+  write_meta "$meta_file" "$subcmd" "$payload" "$log_file" "$pid" "$SKILL_MODE"
+  printf 'Launched detached Copilot longrun process.\n'
+  printf 'PID: %s\n' "$pid"
+  printf 'Skill source: %s\n' "$SKILL_MODE"
+  printf 'Log: %s\n' "$log_file"
+  printf 'Meta: %s\n' "$meta_file"
+  printf 'Follow log: tail -f %s\n' "$log_file"
+  exit 0
+fi
+
+exec "${cmd[@]}"

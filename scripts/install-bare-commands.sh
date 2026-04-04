@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PLUGIN_NAME="copilot-mission-control"
+
+log() {
+  printf '%s\n' "$*"
+}
+
+backup_if_needed() {
+  local target="$1"
+  if [ -L "$target" ]; then
+    rm -f "$target"
+    return
+  fi
+  if [ -e "$target" ]; then
+    local backup="${target}.bak.$(date +%Y%m%d-%H%M%S)"
+    mv "$target" "$backup"
+    log "Backed up existing path: $target -> $backup"
+  fi
+}
+
+plugin_name_matches() {
+  local json_file="$1"
+  python3 - "$json_file" "$PLUGIN_NAME" <<'PY2' >/dev/null 2>&1
+import json, sys
+from pathlib import Path
+obj = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+raise SystemExit(0 if obj.get('name') == sys.argv[2] else 1)
+PY2
+}
+
+discover_plugin_root() {
+  find "$HOME/.copilot/installed-plugins" -maxdepth 4 -type f -name plugin.json 2>/dev/null | while read -r f; do
+    if plugin_name_matches "$f"; then
+      dirname "$f"
+    fi
+  done | head -n 1
+}
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+if ! plugin_name_matches "$ROOT_DIR/plugin.json"; then
+  ROOT_DIR="$(discover_plugin_root)"
+fi
+
+if [ -z "${ROOT_DIR:-}" ] || [ ! -f "$ROOT_DIR/plugin.json" ]; then
+  log "Could not locate plugin root for $PLUGIN_NAME."
+  exit 1
+fi
+
+TARGET_SKILLS_DIR="$HOME/.copilot/skills"
+TARGET_AGENTS_DIR="$HOME/.copilot/agents"
+
+mkdir -p "$TARGET_SKILLS_DIR" "$TARGET_AGENTS_DIR"
+
+for skill_dir in "$ROOT_DIR"/skills/*; do
+  [ -d "$skill_dir" ] || continue
+  skill_name="$(basename "$skill_dir")"
+  target="$TARGET_SKILLS_DIR/$skill_name"
+  backup_if_needed "$target"
+  ln -s "$skill_dir" "$target"
+  log "Installed bare skill: /$skill_name -> $target"
+done
+
+for agent_file in "$ROOT_DIR"/agents/*.md; do
+  [ -f "$agent_file" ] || continue
+  agent_name="$(basename "$agent_file")"
+  target="$TARGET_AGENTS_DIR/$agent_name"
+  backup_if_needed "$target"
+  ln -s "$agent_file" "$target"
+  log "Installed personal agent: $agent_name -> $target"
+done
+
+cat <<EOF2
+
+Done.
+
+You can now invoke these bare commands in Copilot CLI:
+  /longrun
+  /longrun-prompt
+  /longrun-resume
+  /longrun-status
+
+Recommended next steps:
+  1. bash "$ROOT_DIR/scripts/install-global-launcher.sh"
+  2. copilot login
+  3. copilot-longrun doctor
+
+If Copilot CLI is already running, restart the session before testing.
+EOF2
