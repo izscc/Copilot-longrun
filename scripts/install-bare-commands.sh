@@ -20,6 +20,23 @@ backup_if_needed() {
   fi
 }
 
+install_copied_dir() {
+  local source="$1"
+  local target="$2"
+  backup_if_needed "$target"
+  mkdir -p "$target"
+  find "$target" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
+  cp -R "$source"/. "$target"/
+}
+
+install_copied_file() {
+  local source="$1"
+  local target="$2"
+  backup_if_needed "$target"
+  mkdir -p "$(dirname "$target")"
+  cp "$source" "$target"
+}
+
 plugin_name_matches() {
   local json_file="$1"
   python3 - "$json_file" "$PLUGIN_NAME" <<'PY2' >/dev/null 2>&1
@@ -59,18 +76,16 @@ for skill_dir in "$ROOT_DIR"/skills/*; do
   [ -d "$skill_dir" ] || continue
   skill_name="$(basename "$skill_dir")"
   target="$TARGET_SKILLS_DIR/$skill_name"
-  backup_if_needed "$target"
-  ln -s "$skill_dir" "$target"
-  log "Installed bare skill: /$skill_name -> $target"
+  install_copied_dir "$skill_dir" "$target"
+  log "Installed bare skill (copied): /$skill_name -> $target"
 done
 
 for agent_file in "$ROOT_DIR"/agents/*.md; do
   [ -f "$agent_file" ] || continue
   agent_name="$(basename "$agent_file")"
   target="$TARGET_AGENTS_DIR/$agent_name"
-  backup_if_needed "$target"
-  ln -s "$agent_file" "$target"
-  log "Installed personal agent: $agent_name -> $target"
+  install_copied_file "$agent_file" "$target"
+  log "Installed personal agent (copied): $agent_name -> $target"
 done
 
 cat <<EOF2

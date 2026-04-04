@@ -6,12 +6,18 @@ for skill in longrun longrun-prompt longrun-resume longrun-status; do
   if [ -L "$target" ]; then
     rm -f "$target"
     printf 'Removed %s\n' "$target"
+  elif [ -d "$target" ]; then
+    rm -rf "$target"
+    printf 'Removed %s\n' "$target"
   fi
 done
 
 for agent in mission-planner.agent.md mission-researcher.agent.md mission-worker.agent.md mission-verifier.agent.md mission-recovery.agent.md; do
   target="$HOME/.copilot/agents/$agent"
   if [ -L "$target" ]; then
+    rm -f "$target"
+    printf 'Removed %s\n' "$target"
+  elif [ -f "$target" ]; then
     rm -f "$target"
     printf 'Removed %s\n' "$target"
   fi

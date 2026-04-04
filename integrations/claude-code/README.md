@@ -6,9 +6,13 @@
 
 ```bash
 bash scripts/install-agent-adapters.sh
+# 或显式只装 Claude Code：
+bash scripts/install-agent-adapters.sh --agent claude
 bash scripts/install-global-launcher.sh
 copilot-longrun doctor
 ```
+
+> `install-agent-adapters.sh` 会优先按当前环境自动识别可用 agent，并把 Claude Code 命令模板 **复制**到 `~/.claude/commands/`，而不是建立 symlink。
 
 ## 已提供命令模板
 

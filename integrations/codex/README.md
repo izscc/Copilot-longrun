@@ -6,6 +6,8 @@ LongRun 在 Codex 中的推荐集成方式是：**Codex 只做入口和回显，
 
 ```bash
 bash scripts/install-agent-adapters.sh
+# 或显式只装 Codex：
+bash scripts/install-agent-adapters.sh --agent codex
 bash scripts/install-global-launcher.sh
 copilot-longrun doctor
 ```
@@ -14,6 +16,8 @@ copilot-longrun doctor
 
 - Codex 技能：`$CODEX_HOME/skills/copilot-longrun-bridge`
 - Shell 包装器：`longrun` / `longrun-prompt` / `longrun-resume` / `longrun-status`
+
+> `install-agent-adapters.sh` 会优先按当前环境自动识别可用 agent，并把 Codex bridge **复制**到技能目录，而不是建立 symlink。
 
 ## 使用方式
 
