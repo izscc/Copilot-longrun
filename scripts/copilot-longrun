@@ -4,6 +4,7 @@ set -euo pipefail
 PLUGIN_NAME="copilot-mission-control"
 DEFAULT_COPILOT_BIN="copilot"
 DEFAULT_GH_BIN="gh"
+DEFAULT_SCREEN_BIN="screen"
 DEFAULT_MAX_CONTINUES="${COPILOT_LONGRUN_MAX_CONTINUES:-100}"
 LAUNCHER_DIR_NAME=".copilot-mission-control/launcher"
 PLUGIN_REPO_SLUG="izscc/Copilot-longrun"
@@ -23,6 +24,7 @@ SCRIPT_DIR="$(resolve_script_dir)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 COPILOT_BIN="${COPILOT_BIN:-$DEFAULT_COPILOT_BIN}"
 GH_BIN="${GH_BIN:-$DEFAULT_GH_BIN}"
+SCREEN_BIN="${SCREEN_BIN:-$DEFAULT_SCREEN_BIN}"
 COPILOT_CONFIG_DIR="${COPILOT_CONFIG_DIR:-$HOME/.copilot}"
 
 usage() {
@@ -128,6 +130,10 @@ gh_path() {
   find_bin "$GH_BIN" || find_bin_from_common_locations gh
 }
 
+screen_path() {
+  find_bin "$SCREEN_BIN" || find_bin_from_common_locations screen
+}
+
 require_copilot() {
   COPILOT_REAL_BIN="$(copilot_path || true)"
   [ -n "$COPILOT_REAL_BIN" ] || die "copilot CLI not found. Install it first: curl -fsSL https://gh.io/copilot-install | PREFIX=\"$HOME/.local\" bash (or set COPILOT_BIN=/absolute/path/to/copilot)"
@@ -226,12 +232,12 @@ plugin_install_hint() {
 }
 
 shell_join() {
-  local out=""
-  local arg
-  for arg in "$@"; do
-    out+="$(printf '%q' "$arg") "
-  done
-  printf '%s\n' "${out% }"
+  python3 - "$@" <<'PY'
+import shlex, sys
+def clean(value: str) -> str:
+    return value.encode('utf-8', 'surrogateescape').decode('utf-8', 'replace')
+print(shlex.join([clean(arg) for arg in sys.argv[1:]]))
+PY
 }
 
 write_meta() {
@@ -241,23 +247,86 @@ write_meta() {
   local log_file="$4"
   local pid="$5"
   local mode="$6"
-  python3 - "$path" "$subcommand" "$payload" "$log_file" "$pid" "$mode" <<'PY'
+  local backend="$7"
+  local command_line="$8"
+  local session_name="${9:-}"
+  local rc_file="${10:-}"
+  python3 - "$path" "$subcommand" "$payload" "$log_file" "$pid" "$mode" "$backend" "$command_line" "$session_name" "$rc_file" <<'PY'
 import json, os, sys
 from datetime import datetime, timezone
 from pathlib import Path
 path = Path(sys.argv[1])
 path.parent.mkdir(parents=True, exist_ok=True)
+def clean(value: str) -> str:
+    return value.encode('utf-8', 'surrogateescape').decode('utf-8', 'replace')
 obj = {
     'startedAt': datetime.now(timezone.utc).isoformat(),
-    'cwd': os.getcwd(),
-    'subcommand': sys.argv[2],
-    'payload': sys.argv[3],
-    'logFile': sys.argv[4],
+    'cwd': clean(os.getcwd()),
+    'subcommand': clean(sys.argv[2]),
+    'payload': clean(sys.argv[3]),
+    'logFile': clean(sys.argv[4]),
     'pid': int(sys.argv[5]),
-    'skillResolution': sys.argv[6],
+    'skillResolution': clean(sys.argv[6]),
+    'launcherBackend': clean(sys.argv[7]),
+    'command': clean(sys.argv[8]),
 }
+if sys.argv[9]:
+    obj['screenSession'] = clean(sys.argv[9])
+if sys.argv[10]:
+    obj['screenRcFile'] = clean(sys.argv[10])
 path.write_text(json.dumps(obj, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
 PY
+}
+
+screen_quote_for_rc() {
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+find_screen_session_id() {
+  local session_name="$1"
+  local screen_bin="$2"
+  local attempt screen_id
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    screen_id="$("$screen_bin" -ls 2>/dev/null | awk -v name="$session_name" '$1 ~ ("^[0-9]+\\." name "$") { print $1; exit }')"
+    if [ -n "$screen_id" ]; then
+      printf '%s\n' "$screen_id"
+      return 0
+    fi
+    sleep 0.2
+  done
+  return 1
+}
+
+launch_detached_via_screen() {
+  local subcommand="$1"
+  local payload="$2"
+  local log_file="$3"
+  local meta_file="$4"
+  local ts="$5"
+  shift 5
+  local screen_bin session_name screen_rc_file screen_id pid shell_cmd
+  screen_bin="$(screen_path || true)"
+  [ -n "$screen_bin" ] || die "Detached mode requires \`screen\` to provide a pseudo-terminal. Install it first, or run without --detach."
+
+  session_name="copilot-longrun-${subcommand}-${ts}"
+  screen_rc_file="${meta_file%.json}.screenrc"
+  printf 'deflog on\nlogfile "%s"\n' "$(screen_quote_for_rc "$log_file")" >"$screen_rc_file"
+  shell_cmd='cd "$1" && shift && exec "$@"'
+
+  "$screen_bin" -c "$screen_rc_file" -dmS "$session_name" bash -lc "$shell_cmd" bash "$PWD" "$@"
+  screen_id="$(find_screen_session_id "$session_name" "$screen_bin" || true)"
+  pid="${screen_id%%.*}"
+  [ -n "$pid" ] || pid=0
+
+  write_meta "$meta_file" "$subcommand" "$payload" "$log_file" "$pid" "$SKILL_MODE" "screen" "$(shell_join "$@")" "$screen_id" "$screen_rc_file"
+  printf 'Launched detached Copilot longrun process.\n'
+  printf 'PID: %s\n' "$pid"
+  [ -n "$screen_id" ] && printf 'Screen session: %s\n' "$screen_id"
+  printf 'Skill source: %s\n' "$SKILL_MODE"
+  printf 'Launcher backend: screen\n'
+  printf 'Log: %s\n' "$log_file"
+  printf 'Meta: %s\n' "$meta_file"
+  printf 'Follow log: tail -f %s\n' "$log_file"
 }
 
 SKILL_MODE=""
@@ -300,6 +369,7 @@ doctor() {
   local issues=0
   local copilot_bin="$(copilot_path || true)"
   local gh_bin="$(gh_path || true)"
+  local screen_bin="$(screen_path || true)"
   local copilot_login="$(detect_copilot_login || true)"
   local gh_login="$(detect_gh_login || true)"
   local installed_plugin="$(installed_plugin_root || true)"
@@ -356,6 +426,15 @@ BANNER
   else
     warn "全局 launcher 未安装"
     info "     安装：bash $REPO_ROOT/scripts/install-global-launcher.sh"
+  fi
+
+  if [ -n "$screen_bin" ]; then
+    ok "Detached PTY backend 已安装：$screen_bin"
+  else
+    fail "未找到 detached 所需的 screen"
+    info "     LongRun 的 detached 模式需要 pseudo-terminal，当前 Copilot CLI 在 plain nohup 后台下可能无法稳定创建 mission state"
+    info "     macOS 一般自带 /usr/bin/screen；如缺失请安装 screen，或改用前台命令：copilot-longrun run \"<任务描述>\""
+    issues=$((issues + 1))
   fi
 
   if [ -n "$gh_bin" ]; then
@@ -493,15 +572,7 @@ if [ "$detach" -eq 1 ]; then
   ts="$(date +%Y%m%d-%H%M%S)"
   log_file="$launcher_dir/${subcmd}-${ts}.log"
   meta_file="$launcher_dir/${subcmd}-${ts}.json"
-  nohup "${cmd[@]}" >"$log_file" 2>&1 &
-  pid="$!"
-  write_meta "$meta_file" "$subcmd" "$payload" "$log_file" "$pid" "$SKILL_MODE"
-  printf 'Launched detached Copilot longrun process.\n'
-  printf 'PID: %s\n' "$pid"
-  printf 'Skill source: %s\n' "$SKILL_MODE"
-  printf 'Log: %s\n' "$log_file"
-  printf 'Meta: %s\n' "$meta_file"
-  printf 'Follow log: tail -f %s\n' "$log_file"
+  launch_detached_via_screen "$subcmd" "$payload" "$log_file" "$meta_file" "$ts" "${cmd[@]}"
   exit 0
 fi
 

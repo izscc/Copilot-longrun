@@ -165,11 +165,15 @@ gh auth login --web --hostname github.com --git-protocol https
 copilot --autopilot --yolo --no-ask-user -p "/longrun <任务描述>"
 ```
 
+> 这是 `run` 的核心前台命令形态；LongRun launcher 也是在**当前目录**里组装这条命令去调用 Copilot CLI。
+
 #### 用 LongRun launcher
 
 ```bash
 copilot-longrun run --detach "<任务描述>"
 ```
+
+> 可以先用 `copilot-longrun run --dry-run "<任务描述>"` 查看 launcher 实际拼出的 Copilot CLI 命令。
 
 #### 用极简 shell wrapper
 
@@ -177,7 +181,8 @@ copilot-longrun run --detach "<任务描述>"
 longrun "<任务描述>"
 ```
 
-> `longrun` 默认就是 detached，更适合“扔后台一直跑”。
+> `longrun` 默认就是 detached，更适合“扔后台一直跑”。  
+> 从 `v0.6.1` 起，detached 模式不再使用 plain `nohup`，而是改为通过 `screen` 提供 pseudo-terminal；否则当前 Copilot CLI 版本下可能出现“launcher 已启动，但 `.copilot-mission-control/runs/*` 没创建出来”的假启动问题。
 
 ### 2）只生成编排 Prompt
 
@@ -285,7 +290,7 @@ integrations/
 
 ## 当前版本
 
-- `copilot-mission-control v0.6.0`
+- `copilot-mission-control v0.6.1`
 
 ---
 

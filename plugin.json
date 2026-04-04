@@ -1,7 +1,7 @@
 {
   "name": "copilot-mission-control",
   "description": "LongRun bridges GitHub Copilot CLI with skills, hooks, and cross-agent launchers so one prompt can drive resumable long-running missions.",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "author": {
     "name": "zscc.in",
     "url": "https://github.com/zscc"

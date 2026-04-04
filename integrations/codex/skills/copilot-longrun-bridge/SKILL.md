@@ -23,6 +23,24 @@ Use this skill when the user wants to:
 3. Otherwise forward the user intent to the shell wrappers below.
 4. Report back only the decisive launch/status information (PID, log path, meta path, next command).
 
+## What the launcher actually runs
+
+All commands are launched from the **current working directory**.
+
+- `longrun "<task>"`:
+  - `copilot --autopilot --yolo --no-ask-user -p "/longrun <task>"`
+- `longrun-prompt "<task>"`:
+  - `copilot --yolo --no-ask-user -p "/longrun-prompt <task>"`
+- `longrun-status latest`:
+  - `copilot --yolo --no-ask-user -p "/longrun-status latest"`
+- `longrun-resume latest`:
+  - `copilot --autopilot --yolo --no-ask-user -p "/longrun-resume latest"`
+
+Notes:
+
+- The launcher may also add `--max-autopilot-continues <N>` and `--model <MODEL>` when requested.
+- Detached mode must keep a pseudo-terminal. Plain `nohup` can make current Copilot CLI builds fail before mission state is written, so detached launches should use the launcher backend rather than ad-hoc shell backgrounding.
+
 ## Command mapping
 
 - Launch unattended mission:
