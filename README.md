@@ -89,6 +89,7 @@ longrun-prompt
 longrun-resume       # 默认 detached
 longrun-status
 longrun-doctor
+longrun-web          # localhost-only Web Beta
 copilot-longrun      # 底层 launcher
 ```
 
@@ -97,6 +98,90 @@ copilot-longrun      # 底层 launcher
 ```bash
 longrun "<任务描述>"
 ```
+
+---
+
+## Web Beta（`v0.10.0-beta.1`）
+
+Beta 版不重写 LongRun CLI 内核，而是在其上增加一个**本机单用户 Web Control Plane**：
+
+- 只监听 `127.0.0.1`
+- 单工作区主控
+- AI 配置仅用于 **Prompt Compiler**
+- LongRun 真正执行仍由 **GitHub Copilot CLI** 完成
+
+安装 Web 依赖：
+
+```bash
+python3 -m pip install -r requirements-web.txt
+```
+
+启动：
+
+```bash
+longrun-web --workspace "$PWD"
+```
+
+默认地址：
+
+```text
+http://127.0.0.1:8765
+```
+
+### Web Beta 包含什么
+
+- **Prompt Compiler**
+  - 输入原始任务
+  - 本地先生成 `MissionDraft`
+  - 可选用用户配置的 OpenAI-compatible 模型做增强
+  - 输出：
+    - `MissionDraft`
+    - `Compiled LongRun Prompt`
+- **Run 监控台**
+  - 查看 `status.json / plan.md / journal / hook events / artifacts / COMPLETION`
+- **追加任务面板**
+  - 写入 `operator-inbox.md`
+  - 由内核在检查点吸收
+  - 真实状态写入 `status.json.operatorTasks[]`
+- **任务状态双视图**
+  - 主任务主线
+  - 追加任务队列
+
+### 追加任务机制
+
+Beta 首版仍使用：
+
+```text
+.copilot-mission-control/runs/<run-id>/operator-inbox.md
+```
+
+但它只是**请求入口**，不是状态真值源。
+真实状态在：
+
+```text
+status.json.operatorTasks[]
+```
+
+支持状态：
+
+- `pending`
+- `accepted`
+- `applied`
+- `scheduled`
+- `in_progress`
+- `done`
+- `blocked`
+- `rejected`
+- `superseded`
+
+内核在以下检查点吸收新请求：
+
+- phase 切换前
+- verify 后
+- recover 前
+- finalize 前
+
+不会实时打断当前 shell 会话。
 
 ---
 
@@ -204,6 +289,23 @@ LongRun 不做每轮全局重思考，只在这些事件触发轻量恢复：
 3. `verify_run.py`
 4. 再决定继续执行、`finalize complete` 或 `finalize blocked`
 
+### 6.1 Prompt Compiler + Prompt Pack
+
+Web Beta 内置版本化 Prompt Pack：
+
+- `prompt_packs/longrun-compiler/v1/base.md`
+- `profile-*`
+- `complexity-*`
+- `interaction-*`
+
+这让 Prompt 规则不再分散在 README、skills 和临时模板里，而是由：
+
+- `longrun_web/shared_policy.py`
+- `longrun_web/prompt_packs.py`
+- `longrun_web/compiler.py`
+
+共同生成结构化草案与最终 LongRun Prompt。
+
 ### 7. 默认中文输出命名
 
 用户可见输出文件默认使用**简体中文文件名**，例如：
@@ -252,6 +354,28 @@ LongRun launcher 与 `/longrun` 共享统一模型策略：
   - `modelControlMode: session-inherited`
 
 也就是说：**raw `/longrun` 不会再假装自己强制用了 Opus 4.6。**
+
+---
+
+## 机器可读接口
+
+Beta 版补齐了几类 JSON 接口，供 Web Control Plane 直接调用：
+
+```bash
+copilot-longrun doctor --json
+copilot-longrun status --json [run-id|latest]
+copilot-longrun run --detach --json "<task>"
+copilot-longrun resume --detach --json [run-id|latest]
+copilot-longrun prompt --json "<task>"
+```
+
+对应 helper：
+
+```text
+scripts/doctor_snapshot.py
+scripts/run_snapshot.py
+scripts/compile_longrun_prompt.py
+```
 
 ---
 

@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LongRun Web Beta</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header>
+    <h1>LongRun Web Beta</h1>
+    <p>工作区：<code id="workspace">{{ workspace }}</code></p>
+  </header>
+
+  <main class="grid">
+    <section class="card">
+      <h2>环境检测</h2>
+      <button onclick="refreshDoctor()">刷新 Doctor</button>
+      <pre id="doctorBox">加载中...</pre>
+    </section>
+
+    <section class="card">
+      <h2>AI 配置</h2>
+      <div class="form-grid">
+        <label>名称<input id="aiName" value="default"></label>
+        <label>Base URL<input id="aiBaseUrl" value="https://api.zscc.in/v1"></label>
+        <label>API Key<input id="aiKey" type="password"></label>
+        <label>模型<input id="aiModel"></label>
+        <label><input id="aiDefault" type="checkbox" checked> 设为默认</label>
+      </div>
+      <div class="actions">
+        <button onclick="saveAiProfile()">保存配置</button>
+        <button onclick="testAiProfile()">测试连接</button>
+        <button onclick="loadModels()">拉取模型</button>
+      </div>
+      <pre id="aiBox"></pre>
+    </section>
+
+    <section class="card wide">
+      <h2>Prompt Compiler</h2>
+      <label>Prompt Pack
+        <select id="packVersion">
+          {% for version in pack_versions %}<option value="{{ version }}">{{ version }}</option>{% endfor %}
+        </select>
+      </label>
+      <textarea id="taskInput" rows="8" placeholder="输入初始任务或继续补充的任务信息"></textarea>
+      <div class="actions">
+        <button onclick="buildDraft('initial_compile')">本地草案</button>
+        <button onclick="refineDraft('initial_compile')">AI 一键优化</button>
+        <button onclick="finalizePrompt()">生成最终 Prompt</button>
+        <button onclick="launchRun()">发起长跑</button>
+      </div>
+      <div class="split">
+        <div>
+          <h3>Mission Draft</h3>
+          <pre id="draftBox"></pre>
+        </div>
+        <div>
+          <h3>Compiled Prompt</h3>
+          <textarea id="compiledPromptBox" rows="18"></textarea>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Run 列表</h2>
+      <button onclick="refreshRuns()">刷新 Runs</button>
+      <ul id="runsList"></ul>
+    </section>
+
+    <section class="card wide">
+      <h2>当前 Run 详情</h2>
+      <div class="actions">
+        <button onclick="reconcileCurrent()">Reconcile</button>
+        <button onclick="verifyCurrent()">Verify</button>
+        <button onclick="resumeCurrent()">Resume</button>
+        <button onclick="finalizeCurrent('complete')">Finalize Complete</button>
+        <button onclick="finalizeCurrent('blocked')">Finalize Blocked</button>
+      </div>
+      <pre id="runSummaryBox">请选择一个 run</pre>
+      <div class="split">
+        <div>
+          <h3>Plan</h3>
+          <pre id="planBox"></pre>
+        </div>
+        <div>
+          <h3>日志尾部</h3>
+          <pre id="logBox"></pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="card wide">
+      <h2>追加任务 / 中途插话</h2>
+      <p>说明：追加请求写入 <code>operator-inbox.md</code>，由 LongRun 在检查点吸收，不会实时打断当前会话。</p>
+      <textarea id="appendInput" rows="5" placeholder="输入追加任务、调整计划或澄清要求"></textarea>
+      <div class="actions">
+        <button onclick="refineAppendTask()">AI 优化追加任务</button>
+        <button onclick="submitAppendTask()">写入 operator-inbox</button>
+      </div>
+      <pre id="appendBox"></pre>
+    </section>
+
+    <section class="card wide">
+      <h2>追加任务队列</h2>
+      <label>筛选状态
+        <select id="taskFilter" onchange="renderOperatorTasks()">
+          <option value="all">全部</option>
+          <option value="pending">待处理</option>
+          <option value="accepted">已接收</option>
+          <option value="applied">已吸收</option>
+          <option value="scheduled">已排队</option>
+          <option value="in_progress">进行中</option>
+          <option value="done">已完成</option>
+          <option value="blocked">已阻塞</option>
+          <option value="rejected">已拒绝</option>
+          <option value="superseded">已覆盖</option>
+        </select>
+      </label>
+      <table>
+        <thead><tr><th>标题</th><th>类型</th><th>状态</th><th>优先级</th><th>摘要</th></tr></thead>
+        <tbody id="operatorTasksBody"></tbody>
+      </table>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

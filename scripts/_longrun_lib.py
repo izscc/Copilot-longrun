@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -19,6 +20,12 @@ DEFAULT_MODEL_AVAILABILITY = LONGRUN_HOME / "config" / "model-availability.json"
 COPILOT_CONFIG_DIR = Path(os.environ.get("COPILOT_CONFIG_DIR", str(Path.home() / ".copilot")))
 MANAGED_PLAN_START = "<!-- LONGRUN:STATUS:START -->"
 MANAGED_PLAN_END = "<!-- LONGRUN:STATUS:END -->"
+INBOX_BLOCK_RE = re.compile(
+    r"<!--\s*LONGRUN:INBOX\s+(.*?)\s*-->\s*(.*?)\s*<!--\s*/LONGRUN:INBOX\s*-->",
+    flags=re.S,
+)
+TERMINAL_OPERATOR_TASK_STATUSES = {"done", "blocked", "rejected", "superseded"}
+OPEN_OPERATOR_TASK_STATUSES = {"pending", "accepted", "scheduled", "in_progress"}
 KNOWN_MODEL_DISPLAY = {
     "claude-opus-4.6": "Claude Opus 4.6",
     "claude-opus-4.5": "Claude Opus 4.5",
@@ -175,6 +182,10 @@ def sources_path(target: RunTarget) -> Path:
 
 def completion_path(target: RunTarget) -> Path:
     return target.run_dir / "COMPLETION.md"
+
+
+def operator_inbox_path(target: RunTarget) -> Path:
+    return target.run_dir / "operator-inbox.md"
 
 
 def legacy_completion_path(target: RunTarget) -> Path:
@@ -498,6 +509,266 @@ def ensure_status_defaults(status: dict[str, Any] | None) -> dict[str, Any]:
     naming.setdefault("defaultLocale", language)
     naming.setdefault("defaultVisibleNameStyle", default_visible_name_style(language))
     payload["naming"] = naming
+    operator_inbox = payload.get("operatorInbox") or {}
+    operator_inbox.setdefault("lastSeenId", None)
+    operator_inbox.setdefault("lastAppliedId", None)
+    operator_inbox.setdefault("pendingCount", 0)
+    payload["operatorInbox"] = operator_inbox
+    operator_tasks = payload.get("operatorTasks") or []
+    normalized_tasks: list[dict[str, Any]] = []
+    for item in operator_tasks:
+        if not isinstance(item, dict):
+            continue
+        task = copy.deepcopy(item)
+        task.setdefault("id", task.get("sourceRequestId") or stable_source_id(str(task)))
+        task.setdefault("sourceRequestId", task["id"])
+        task.setdefault("createdAt", payload.get("createdAt") or now_iso())
+        task.setdefault("type", "append_task")
+        task.setdefault("title", task.get("normalizedText") or "追加任务")
+        task.setdefault("rawText", task.get("normalizedText") or "")
+        task.setdefault("normalizedText", task.get("rawText") or "")
+        task.setdefault("status", "pending")
+        task.setdefault("statusReason", "")
+        task.setdefault("priority", "normal")
+        task.setdefault("linkedWorkstream", None)
+        task.setdefault("linkedArtifacts", [])
+        task.setdefault("linkedDeliverables", [])
+        task.setdefault("resultSummary", "")
+        task.setdefault("appliedAt", None)
+        task.setdefault("completedAt", None)
+        normalized_tasks.append(task)
+    payload["operatorTasks"] = normalized_tasks
+    return payload
+
+
+def normalize_operator_task_type(value: str | None) -> str:
+    token = (value or "append_task").strip().lower().replace("-", "_")
+    mapping = {
+        "adjust_plan": "adjust_plan",
+        "append_task": "append_task",
+        "clarify": "clarify",
+    }
+    return mapping.get(token, "append_task")
+
+
+def _parse_meta_kv(meta_text: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for token in shlex.split(meta_text):
+        if "=" not in token:
+            continue
+        key, value = token.split("=", 1)
+        out[key.strip()] = value.strip()
+    return out
+
+
+def _clean_markdown_value(text: str) -> str:
+    lines = [line.rstrip() for line in text.strip().splitlines()]
+    return "\n".join(lines).strip()
+
+
+def _parse_markdown_list(text: str) -> list[str]:
+    items: list[str] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        line = re.sub(r"^[-*]\s*", "", line).strip()
+        if not line or line in {"-", "*", "none", "(none)", "无", "暂无"}:
+            continue
+        items.append(line)
+    return items
+
+
+def _parse_operator_sections(body: str) -> tuple[str, dict[str, str]]:
+    title = "追加任务"
+    lines = body.splitlines()
+    index = 0
+    if lines and re.match(r"^##\s+Operator Request\s*:\s*", lines[0].strip(), flags=re.I):
+        title = re.sub(r"^##\s+Operator Request\s*:\s*", "", lines[0].strip(), flags=re.I).strip() or title
+        index = 1
+    current = "body"
+    sections: dict[str, list[str]] = {current: []}
+    for raw in lines[index:]:
+        stripped = raw.strip()
+        heading = re.match(r"^###\s+(.+?)\s*$", stripped)
+        if heading:
+            current = heading.group(1).strip().lower()
+            sections.setdefault(current, [])
+            continue
+        sections.setdefault(current, []).append(raw)
+    return title, {key: _clean_markdown_value("\n".join(value)) for key, value in sections.items()}
+
+
+def parse_operator_inbox_entries(text: str) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for meta_text, body in INBOX_BLOCK_RE.findall(text):
+        meta = _parse_meta_kv(meta_text)
+        title, sections = _parse_operator_sections(body)
+        normalized = (
+            sections.get("normalized request")
+            or sections.get("normalized text")
+            or sections.get("request")
+            or sections.get("body")
+            or ""
+        ).strip()
+        raw_text = (sections.get("raw request") or sections.get("raw text") or normalized).strip()
+        entries.append({
+            "id": meta.get("id") or stable_source_id(meta_text, body),
+            "ts": meta.get("ts") or now_iso(),
+            "type": normalize_operator_task_type(meta.get("type")),
+            "priority": (meta.get("priority") or sections.get("priority") or "normal").strip() or "normal",
+            "title": title,
+            "status": meta.get("status") or "submitted",
+            "rawText": raw_text,
+            "normalizedText": normalized or raw_text,
+            "linkedDeliverables": _parse_markdown_list(sections.get("linked deliverables", "")),
+            "linkedArtifacts": _parse_markdown_list(sections.get("linked artifacts", "")),
+            "linkedWorkstream": (_parse_markdown_list(sections.get("linked workstream", "")) or [None])[0],
+        })
+    return entries
+
+
+def _operator_task_sort_key(task: dict[str, Any]) -> tuple[str, str]:
+    return (str(task.get("createdAt") or ""), str(task.get("id") or ""))
+
+
+def _operator_task_is_open(task: dict[str, Any]) -> bool:
+    return str(task.get("status") or "") in OPEN_OPERATOR_TASK_STATUSES
+
+
+def _operator_task_output_present(target: RunTarget, status: dict[str, Any], task: dict[str, Any]) -> bool:
+    linked_deliverables = [str(item) for item in task.get("linkedDeliverables") or [] if item]
+    linked_artifacts = [str(item) for item in task.get("linkedArtifacts") or [] if item]
+    linked_workstream = str(task.get("linkedWorkstream") or "").strip()
+
+    checks: list[bool] = []
+    for item in linked_deliverables:
+        path = resolve_artifact_path(target, item)
+        checks.append(path.exists() and path.is_file() and path.stat().st_size > 0)
+    for item in linked_artifacts:
+        path = resolve_artifact_path(target, item)
+        checks.append(path.exists() and path.is_file() and path.stat().st_size > 0)
+    if checks:
+        return all(checks)
+    if linked_workstream:
+        return linked_workstream in [str(item) for item in status.get("completedWorkstreams") or []]
+    return False
+
+
+def _mark_superseded(existing: list[dict[str, Any]], new_task: dict[str, Any]) -> None:
+    new_signature = (new_task.get("type"), (new_task.get("title") or "").strip(), (new_task.get("normalizedText") or "").strip())
+    for task in existing:
+        if task.get("sourceRequestId") == new_task.get("sourceRequestId"):
+            continue
+        signature = (task.get("type"), (task.get("title") or "").strip(), (task.get("normalizedText") or "").strip())
+        if signature != new_signature:
+            continue
+        if str(task.get("status") or "") in TERMINAL_OPERATOR_TASK_STATUSES:
+            continue
+        task["status"] = "superseded"
+        task["statusReason"] = f"Superseded by newer request {new_task.get('sourceRequestId')}"
+        if not task.get("completedAt"):
+            task["completedAt"] = now_iso()
+
+
+def sync_operator_tasks(target: RunTarget, status: dict[str, Any] | None = None, *, checkpoint: str = "general") -> dict[str, Any]:
+    payload = ensure_status_defaults(status)
+    inbox_file = operator_inbox_path(target)
+    entries = parse_operator_inbox_entries(read_text(inbox_file, ""))
+    tasks = [copy.deepcopy(item) for item in payload.get("operatorTasks") or [] if isinstance(item, dict)]
+    by_request = {str(item.get("sourceRequestId") or item.get("id") or ""): item for item in tasks}
+    last_seen_id = payload.get("operatorInbox", {}).get("lastSeenId")
+
+    for entry in entries:
+        request_id = str(entry["id"])
+        if request_id in by_request:
+            continue
+        task = {
+            "id": request_id,
+            "sourceRequestId": request_id,
+            "createdAt": entry["ts"],
+            "type": entry["type"],
+            "title": entry["title"],
+            "rawText": entry["rawText"],
+            "normalizedText": entry["normalizedText"],
+            "status": "pending",
+            "statusReason": f"Captured from operator inbox at {checkpoint}",
+            "priority": entry["priority"],
+            "linkedWorkstream": entry["linkedWorkstream"],
+            "linkedArtifacts": entry["linkedArtifacts"],
+            "linkedDeliverables": entry["linkedDeliverables"],
+            "resultSummary": "",
+            "appliedAt": None,
+            "completedAt": None,
+        }
+        _mark_superseded(tasks, task)
+        tasks.append(task)
+        by_request[request_id] = task
+        last_seen_id = request_id
+
+    completed_at = parse_iso(payload.get("completedAt"))
+    for task in tasks:
+        created_at = parse_iso(task.get("createdAt"))
+        task_type = normalize_operator_task_type(task.get("type"))
+        status_name = str(task.get("status") or "pending")
+        if status_name == "pending":
+            task["status"] = "accepted"
+            task["statusReason"] = f"Accepted at {checkpoint} checkpoint"
+            status_name = "accepted"
+        if task_type in {"adjust_plan", "clarify"} and status_name == "accepted":
+            task["status"] = "applied"
+            task["statusReason"] = f"Applied at {checkpoint} checkpoint"
+            task["appliedAt"] = task.get("appliedAt") or now_iso()
+            task["resultSummary"] = task.get("resultSummary") or "已吸收到任务上下文。"
+            status_name = "applied"
+        if task_type == "append_task":
+            if status_name == "accepted":
+                task["status"] = "scheduled"
+                task["statusReason"] = f"Queued at {checkpoint} checkpoint"
+                status_name = "scheduled"
+            if status_name == "scheduled":
+                linked_workstream = str(task.get("linkedWorkstream") or "").strip()
+                if linked_workstream and linked_workstream in [str(item) for item in payload.get("activeWorkstreams") or []]:
+                    task["status"] = "in_progress"
+                    task["statusReason"] = f"Linked workstream {linked_workstream} is active"
+                    task["appliedAt"] = task.get("appliedAt") or now_iso()
+                    status_name = "in_progress"
+                elif not linked_workstream and payload.get("state") == "running":
+                    task["status"] = "in_progress"
+                    task["statusReason"] = f"Queued request entered execution at {checkpoint}"
+                    task["appliedAt"] = task.get("appliedAt") or now_iso()
+                    status_name = "in_progress"
+            if status_name in {"accepted", "scheduled", "in_progress"} and _operator_task_output_present(target, payload, task):
+                task["status"] = "done"
+                task["statusReason"] = "Detected linked outputs in current run state"
+                task["appliedAt"] = task.get("appliedAt") or now_iso()
+                task["completedAt"] = task.get("completedAt") or now_iso()
+                task["resultSummary"] = task.get("resultSummary") or "已检测到关联交付物/工件。"
+                status_name = "done"
+        if payload.get("state") == "blocked" and status_name in OPEN_OPERATOR_TASK_STATUSES:
+            task["status"] = "blocked"
+            task["statusReason"] = "Run is blocked before this operator task completed"
+            task["completedAt"] = task.get("completedAt") or now_iso()
+        elif payload.get("state") == "complete" and status_name in OPEN_OPERATOR_TASK_STATUSES:
+            if created_at and completed_at and created_at > completed_at:
+                task["status"] = "scheduled"
+                task["statusReason"] = "New request received after run completion; resume required"
+            elif _operator_task_output_present(target, payload, task):
+                task["status"] = "done"
+                task["statusReason"] = "Detected linked outputs after completion"
+                task["completedAt"] = task.get("completedAt") or now_iso()
+                task["resultSummary"] = task.get("resultSummary") or "已在已完成 run 中检测到交付结果。"
+            else:
+                task["status"] = "blocked"
+                task["statusReason"] = "Run completed before this operator task produced linked outputs"
+                task["completedAt"] = task.get("completedAt") or now_iso()
+
+    tasks = sorted(tasks, key=_operator_task_sort_key)
+    payload["operatorTasks"] = tasks
+    payload["operatorInbox"]["lastSeenId"] = last_seen_id
+    applied = [task for task in tasks if task.get("status") in {"applied", "done"}]
+    payload["operatorInbox"]["lastAppliedId"] = applied[-1]["sourceRequestId"] if applied else payload["operatorInbox"].get("lastAppliedId")
+    payload["operatorInbox"]["pendingCount"] = len([task for task in tasks if _operator_task_is_open(task)])
     return payload
 
 
@@ -692,6 +963,17 @@ def _status_board_lines(target: RunTarget, status: dict[str, Any]) -> list[str]:
     else:
         lines.append("- [ ] None recorded")
 
+    operator_tasks = [item for item in status.get("operatorTasks") or [] if isinstance(item, dict)]
+    if operator_tasks:
+        status_counts: dict[str, int] = {}
+        for item in operator_tasks:
+            key = str(item.get("status") or "unknown")
+            status_counts[key] = status_counts.get(key, 0) + 1
+        lines.extend(["", "### Operator Tasks"])
+        for key in ["pending", "accepted", "scheduled", "in_progress", "done", "blocked", "rejected", "superseded", "applied"]:
+            if status_counts.get(key):
+                lines.append(f"- {key}: {status_counts[key]}")
+
     lines.append(MANAGED_PLAN_END)
     return lines
 
@@ -754,7 +1036,7 @@ def plan_sync_findings(target: RunTarget, status: dict[str, Any] | None = None) 
 
 
 def local_verify(target: RunTarget, status_override: dict[str, Any] | None = None) -> dict[str, Any]:
-    status = refresh_artifact_inventory(target, status_override or read_json(status_path(target), {}))
+    status = sync_operator_tasks(target, refresh_artifact_inventory(target, status_override or read_json(status_path(target), {})), checkpoint="verify")
     deliverables = status.get("deliverables") or []
     deliverables = [deliverables] if isinstance(deliverables, str) else deliverables
     hard_failures: list[str] = []
@@ -791,6 +1073,10 @@ def local_verify(target: RunTarget, status_override: dict[str, Any] | None = Non
         hard_failures.append("COMPLETION.md is missing for finalized run")
     elif status.get("state") in {"complete", "blocked"} and legacy_completion.exists() and not completion.exists():
         soft_warnings.append("legacy final-summary.md exists without COMPLETION.md")
+    if status.get("state") in {"complete", "blocked"}:
+        open_tasks = [task for task in status.get("operatorTasks") or [] if isinstance(task, dict) and _operator_task_is_open(task)]
+        if open_tasks:
+            drift_findings.append("finalized run still has open operator tasks")
     failure_class, recommended_action = classify_failure(
         hard_failures,
         drift_findings,

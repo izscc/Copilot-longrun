@@ -20,6 +20,7 @@ from _longrun_lib import (  # noqa: E402
     resolve_run_target,
     sources_path,
     status_path,
+    sync_operator_tasks,
     sync_plan_markdown,
     write_json_atomic,
     write_text_atomic,
@@ -91,11 +92,12 @@ def main() -> int:
     target = resolve_run_target(args.workspace, args.run_id)
     status_file = status_path(target)
     current = ensure_status_defaults(read_json(status_file, {}))
+    current = sync_operator_tasks(target, current, checkpoint="finalize")
 
     delivered = coerce_list(args.delivered_artifact) or list(current.get("deliverables") or [])
     provisional = dict(current)
     provisional["deliverables"] = delivered
-    provisional = refresh_artifact_inventory(target, provisional)
+    provisional = sync_operator_tasks(target, refresh_artifact_inventory(target, provisional), checkpoint="finalize")
 
     verification = local_verify(target, status_override=provisional) if args.local_verify else {
         "ok": True,
@@ -122,7 +124,7 @@ def main() -> int:
     blockers = coerce_list(args.blocker)
 
     if args.status == "complete" and args.local_verify and not verification.get("ok") and not args.force_complete:
-        failed = refresh_artifact_inventory(target, current)
+        failed = sync_operator_tasks(target, refresh_artifact_inventory(target, current), checkpoint="finalize")
         failed["phase"] = "verify"
         failed["summary"] = current.get("summary") or args.headline
         failed["verification"] = {
@@ -146,7 +148,7 @@ def main() -> int:
             print(json.dumps(failed, ensure_ascii=False, indent=2))
         return 1
 
-    updated = refresh_artifact_inventory(target, provisional)
+    updated = sync_operator_tasks(target, refresh_artifact_inventory(target, provisional), checkpoint="finalize")
     updated["state"] = args.status
     updated["phase"] = "finalize"
     updated["summary"] = args.headline

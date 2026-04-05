@@ -41,6 +41,7 @@ disable-model-invocation: false
 如果出现以下任一情况，也要明确指出是**脏状态 / state drift**：
 - `status=complete` 但 `deliverables` 为空
 - `status=complete` 但 `activeWorkstreams` 不为空
+- `status=complete` 但 `operatorTasks[]` 仍有 `pending | accepted | scheduled | in_progress`
 - `status=complete` 但 `.copilot-mission-control/state/active-run-id` 仍指向当前 run
 - `plan.md` 顶部缺少 `LongRun Status Board` 或未和 `status.json` 同步
 - `selectedModel=claude-opus-*`，但 `modelControlMode=session-inherited`

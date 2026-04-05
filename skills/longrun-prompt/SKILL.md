@@ -10,6 +10,9 @@ disable-model-invocation: false
 
 如果用户其实要立刻开始长跑，请改用 `/longrun`。
 
+补充：Web Beta 已内置正式的 Prompt Compiler 与版本化 Prompt Pack。
+这个 skill 现在更偏向 **CLI 兼容入口**；若在 Web 中使用，则以 Prompt Pack 为准。
+
 ## 1. 先分析任务画像
 
 必须先提取或推断：

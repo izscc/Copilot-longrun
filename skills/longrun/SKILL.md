@@ -15,6 +15,7 @@ LongRun 采用**轻架构**：
 - `task-list.md` 默认不受管
 - helpers 优先于复杂 shell
 - 任务内容结构留给 `mission.md` / 当前任务，不写死进插件规则
+- 若存在 `operator-inbox.md`，仅在检查点吸收追加任务，并把真实状态写入 `status.json.operatorTasks[]`
 
 ## 1. 先确认 helper bundle
 

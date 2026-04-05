@@ -19,7 +19,7 @@ backup_if_needed() {
   fi
 }
 
-for name in copilot-longrun longrun longrun-prompt longrun-resume longrun-status longrun-doctor; do
+for name in copilot-longrun longrun longrun-prompt longrun-resume longrun-status longrun-doctor longrun-web; do
   backup_if_needed "$HOME/.local/bin/$name"
   cp "$ROOT_DIR/scripts/$name" "$HOME/.local/bin/$name"
   chmod +x "$HOME/.local/bin/$name"
@@ -33,6 +33,7 @@ printf '  longrun-prompt\n'
 printf '  longrun-resume       # detached by default\n'
 printf '  longrun-status\n'
 printf '  longrun-doctor\n'
+printf '  longrun-web          # localhost-only Web Beta\n'
 printf '\nIf needed, add this to your shell config:\n'
 printf '  export PATH="$HOME/.local/bin:$PATH"\n'
 printf '\nReminder: bare skills + helper bundle should also be installed via:\n'

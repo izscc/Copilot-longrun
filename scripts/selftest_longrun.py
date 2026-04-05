@@ -12,6 +12,13 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from _longrun_lib import read_json, read_text  # noqa: E402
+from _longrun_lib import operator_inbox_path, resolve_run_target  # noqa: E402
+
+ROOT_DIR = SCRIPT_DIR.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from longrun_web.compiler import compile_prompt  # noqa: E402
 
 SAMPLE_RUN = Path("/Users/zscc.in/Desktop/AI/Claudecode-thinking/.copilot-mission-control/runs/20260405-071402-claude-code-book")
 
@@ -200,12 +207,120 @@ def test_historical_run_regression(temp_root: Path) -> None:
     assert read_text(state_dir / "active-run-id", "").strip() == ""
 
 
+def test_operator_task_lifecycle(temp_root: Path) -> None:
+    workspace, run_dir, _ = setup_run(temp_root, "operator-workspace", "20990101-000003-operator")
+    target = resolve_run_target(workspace, run_dir.name)
+    artifacts_dir = run_dir / "artifacts"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+    run_cmd(
+        str(SCRIPT_DIR / "write_status.py"),
+        "--workspace", str(workspace),
+        "--run-id", run_dir.name,
+        "--init-from-prompt", "请整理一份中文任务总览",
+    )
+    run_cmd(
+        str(SCRIPT_DIR / "write_status.py"),
+        "--workspace", str(workspace),
+        "--run-id", run_dir.name,
+        "--patch-json",
+        json.dumps(
+            {
+                "state": "running",
+                "phase": "execute",
+                "activeWorkstreams": ["deliverables"],
+                "deliverables": ["artifacts/最终总结.md"],
+            },
+            ensure_ascii=False,
+        ),
+    )
+
+    inbox = operator_inbox_path(target)
+    inbox.write_text(
+        "\n".join(
+            [
+                "<!-- LONGRUN:INBOX id=req-op-1 ts=2099-01-01T00:00:00Z type=append_task status=submitted priority=normal -->",
+                "## Operator Request: 补充总结",
+                "",
+                "### Raw Request",
+                "请补充最终总结",
+                "",
+                "### Normalized Request",
+                "请补充最终总结",
+                "",
+                "### Linked Deliverables",
+                "- artifacts/最终总结.md",
+                "",
+                "<!-- /LONGRUN:INBOX -->",
+                "",
+                "<!-- LONGRUN:INBOX id=req-op-2 ts=2099-01-01T00:01:00Z type=clarify status=submitted priority=normal -->",
+                "## Operator Request: 说明一下方案",
+                "",
+                "### Raw Request",
+                "说明一下当前方案",
+                "",
+                "### Normalized Request",
+                "说明一下当前方案",
+                "",
+                "<!-- /LONGRUN:INBOX -->",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    run_cmd(str(SCRIPT_DIR / "reconcile_run.py"), "--workspace", str(workspace), "--run-id", run_dir.name)
+    status = read_json(run_dir / "status.json", {})
+    tasks = {item["sourceRequestId"]: item for item in status.get("operatorTasks", [])}
+    assert tasks["req-op-1"]["status"] in {"scheduled", "in_progress"}
+    assert tasks["req-op-2"]["status"] == "applied"
+
+    (artifacts_dir / "最终总结.md").write_text("# 最终总结\n\n已补充。\n", encoding="utf-8")
+    run_cmd(str(SCRIPT_DIR / "reconcile_run.py"), "--workspace", str(workspace), "--run-id", run_dir.name)
+    status = read_json(run_dir / "status.json", {})
+    tasks = {item["sourceRequestId"]: item for item in status.get("operatorTasks", [])}
+    assert tasks["req-op-1"]["status"] == "done"
+    assert status.get("operatorInbox", {}).get("pendingCount", 0) == 0
+
+
+def test_prompt_compiler_local() -> None:
+    result = compile_prompt("请调研 Copilot CLI LongRun，并输出中文总结与来源附录")
+    draft = result.get("missionDraft") or {}
+    assert draft.get("language") == "zh-CN"
+    assert draft.get("profile") in {"research", "office"}
+    assert result.get("compiledPrompt")
+    operator_request = result.get("operatorRequest") or {}
+    assert operator_request.get("type") in {"append_task", "adjust_plan", "clarify"}
+
+
+def test_web_api_smoke() -> None:
+    try:
+        from fastapi.testclient import TestClient
+        from longrun_web.server import app
+    except Exception:
+        print("web api smoke: skipped (fastapi/httpx not installed)")
+        return
+
+    import os
+    with tempfile.TemporaryDirectory(prefix="longrun-web-api-") as tmp:
+        os.environ["LONGRUN_WEB_WORKSPACE"] = tmp
+        client = TestClient(app)
+        doctor = client.get("/api/doctor")
+        assert doctor.status_code == 200
+        draft = client.post("/api/compiler/draft", json={"text": "请输出中文任务总览"})
+        assert draft.status_code == 200
+        assert draft.json()["missionDraft"]["language"] == "zh-CN"
+
+
 def main() -> int:
     temp_root = Path(tempfile.mkdtemp(prefix="longrun-selftest-"))
     try:
         test_finalize_gate_and_force_complete(temp_root)
         test_reconcile_harvest_and_naming(temp_root)
         test_historical_run_regression(temp_root)
+        test_operator_task_lifecycle(temp_root)
+        test_prompt_compiler_local()
+        test_web_api_smoke()
         print("selftest: ok")
         return 0
     finally:

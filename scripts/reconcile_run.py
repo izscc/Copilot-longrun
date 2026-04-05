@@ -19,6 +19,7 @@ from _longrun_lib import (  # noqa: E402
     refresh_artifact_inventory,
     resolve_run_target,
     status_path,
+    sync_operator_tasks,
     sync_plan_markdown,
     write_json_atomic,
 )
@@ -33,7 +34,7 @@ def main() -> int:
 
     target = resolve_run_target(args.workspace, args.run_id)
     current = ensure_status_defaults(read_json(status_path(target), {}))
-    updated = refresh_artifact_inventory(target, current)
+    updated = sync_operator_tasks(target, refresh_artifact_inventory(target, current), checkpoint="reconcile")
 
     updated["completedWorkstreams"] = infer_completed_workstreams(target, updated)
     if updated.get("state") in {"complete", "blocked"}:

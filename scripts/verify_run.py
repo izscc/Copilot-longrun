@@ -10,6 +10,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from _longrun_lib import local_verify, resolve_run_target  # noqa: E402
+from _longrun_lib import ensure_status_defaults, now_iso, read_json, status_path, sync_operator_tasks, sync_plan_markdown, write_json_atomic  # noqa: E402
 
 
 def main() -> int:
@@ -20,7 +21,20 @@ def main() -> int:
     args = parser.parse_args()
 
     target = resolve_run_target(args.workspace, args.run_id)
-    result = local_verify(target)
+    current = ensure_status_defaults(read_json(status_path(target), {}))
+    current = sync_operator_tasks(target, current, checkpoint="verify")
+    result = local_verify(target, status_override=current)
+    current["verification"] = {
+        "state": "passed" if result.get("ok") else "failed",
+        "hardFailures": result.get("hardFailures", []),
+        "softWarnings": result.get("softWarnings", []),
+        "driftFindings": result.get("driftFindings", []),
+        "recommendedAction": result.get("recommendedAction"),
+        "failureClass": result.get("failureClass"),
+        "lastVerifiedAt": now_iso(),
+    }
+    write_json_atomic(status_path(target), current)
+    sync_plan_markdown(target, current)
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:

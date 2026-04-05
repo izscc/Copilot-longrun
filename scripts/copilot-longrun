@@ -40,11 +40,12 @@ LongRun 让你的Copilot Pro权益得到最大化的价值呈现！
 开发者：zscc.in 知识船仓·公益社区。
 
 Usage:
-  copilot-longrun run [--detach] [--max-continues N] [--model MODEL] [--refresh-model-cache] [--dry-run] <task>
-  copilot-longrun prompt [--model MODEL] [--refresh-model-cache] [--dry-run] <task>
-  copilot-longrun resume [--detach] [--max-continues N] [--model MODEL] [--refresh-model-cache] [--dry-run] [run-id|latest]
-  copilot-longrun status [--model MODEL] [--refresh-model-cache] [--dry-run] [run-id|latest]
-  copilot-longrun doctor [--refresh-model-cache]
+  copilot-longrun run [--detach] [--json] [--max-continues N] [--model MODEL] [--refresh-model-cache] [--dry-run] <task>
+  copilot-longrun prompt [--json] [--model MODEL] [--refresh-model-cache] [--dry-run] <task>
+  copilot-longrun resume [--detach] [--json] [--max-continues N] [--model MODEL] [--refresh-model-cache] [--dry-run] [run-id|latest]
+  copilot-longrun status [--json] [--model MODEL] [--refresh-model-cache] [--dry-run] [run-id|latest]
+  copilot-longrun doctor [--json] [--refresh-model-cache]
+  copilot-longrun web [--host HOST] [--port PORT] [--workspace DIR]
   copilot-longrun selftest
   copilot-longrun help
 
@@ -335,26 +336,60 @@ find_screen_session_id() {
 launch_detached_via_screen() {
   local subcommand="$1" payload="$2" log_file="$3" meta_file="$4" ts="$5" selected_model="$6"
   shift 6
-  local screen_bin session_name screen_rc_file screen_id pid shell_cmd
+  local screen_bin session_name screen_rc_file screen_id pid shell_cmd prev_latest observed_run_id attempt
   screen_bin="$(screen_path || true)"
   [ -n "$screen_bin" ] || die "Detached mode requires screen. Install it first or run without --detach."
   session_name="copilot-longrun-${subcommand}-${ts}"
   screen_rc_file="${meta_file%.json}.screenrc"
   printf 'deflog on\nlogfile "%s"\n' "$(screen_quote_for_rc "$log_file")" >"$screen_rc_file"
   shell_cmd='cd "$1" && shift && exec "$@"'
+  prev_latest="$(cat "$PWD/.copilot-mission-control/state/latest-run-id" 2>/dev/null || true)"
   "$screen_bin" -c "$screen_rc_file" -dmS "$session_name" bash -lc "$shell_cmd" bash "$PWD" "$@"
   screen_id="$(find_screen_session_id "$session_name" "$screen_bin" || true)"
   pid="${screen_id%%.*}"
   [ -n "$pid" ] || pid=0
+  observed_run_id=""
+  if [ "$subcommand" = "run" ]; then
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+      observed_run_id="$(cat "$PWD/.copilot-mission-control/state/latest-run-id" 2>/dev/null || true)"
+      if [ -n "$observed_run_id" ] && [ "$observed_run_id" != "$prev_latest" ]; then
+        break
+      fi
+      sleep 0.2
+    done
+  elif [ "$subcommand" = "resume" ]; then
+    observed_run_id="$payload"
+  fi
   write_meta "$meta_file" "$subcommand" "$payload" "$log_file" "$pid" "$SKILL_MODE" "screen" "$(shell_join "$@")" "$selected_model"
-  printf 'Launched detached Copilot LongRun process.\n'
-  printf 'PID: %s\n' "$pid"
-  [ -n "$screen_id" ] && printf 'Screen session: %s\n' "$screen_id"
-  printf 'Skill source: %s\n' "$SKILL_MODE"
-  printf 'Selected model: %s\n' "$selected_model"
-  printf 'Log: %s\n' "$log_file"
-  printf 'Meta: %s\n' "$meta_file"
-  printf 'Follow log: tail -f %s\n' "$log_file"
+  if [ "${output_json:-0}" -eq 1 ]; then
+    python3 - "$subcommand" "$payload" "$observed_run_id" "$pid" "$screen_id" "$log_file" "$meta_file" "$SKILL_MODE" "$selected_model" <<'PY'
+import json, sys
+subcommand, payload, run_id, pid, screen_id, log_file, meta_file, skill_mode, selected_model = sys.argv[1:]
+run_id = run_id or None
+print(json.dumps({
+    "ok": True,
+    "mode": "detached",
+    "subcommand": subcommand,
+    "payload": payload,
+    "runId": run_id,
+    "pid": int(pid or 0),
+    "screenSession": screen_id or None,
+    "logFile": log_file,
+    "metaFile": meta_file,
+    "selectedModel": selected_model,
+    "skillSource": skill_mode,
+}, ensure_ascii=False, indent=2))
+PY
+  else
+    printf 'Launched detached Copilot LongRun process.\n'
+    printf 'PID: %s\n' "$pid"
+    [ -n "$screen_id" ] && printf 'Screen session: %s\n' "$screen_id"
+    printf 'Skill source: %s\n' "$SKILL_MODE"
+    printf 'Selected model: %s\n' "$selected_model"
+    printf 'Log: %s\n' "$log_file"
+    printf 'Meta: %s\n' "$meta_file"
+    printf 'Follow log: tail -f %s\n' "$log_file"
+  fi
 }
 
 SKILL_MODE=""
@@ -482,16 +517,26 @@ case "$subcmd" in
   help|-h|--help) usage; exit 0 ;;
   doctor)
     refresh_model_cache=0
+    output_json=0
     while [ "$#" -gt 0 ]; do
       case "$1" in
+        --json) output_json=1; shift ;;
         --refresh-model-cache) refresh_model_cache=1; shift ;;
         --) shift; break ;;
         -*) die "unknown option: $1" ;;
         *) break ;;
       esac
     done
+    if [ "$output_json" -eq 1 ]; then
+      helper="$(helper_path doctor_snapshot.py || true)"
+      [ -n "$helper" ] || helper="$REPO_ROOT/scripts/doctor_snapshot.py"
+      exec python3 "$helper" --workspace "$PWD"
+    fi
     doctor "$refresh_model_cache"
     exit $?
+    ;;
+  web)
+    exec "$REPO_ROOT/scripts/longrun-web" "$@"
     ;;
   selftest)
     helper="$(helper_path selftest_longrun.py || true)"
@@ -500,18 +545,16 @@ case "$subcmd" in
     ;;
 esac
 
-preflight_or_die
-
-ensure_model_availability_path || true
-
 model=""
 max_continues="$DEFAULT_MAX_CONTINUES"
 detach=0
 dry_run=0
 refresh_model_cache=0
+output_json=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --detach) detach=1; shift ;;
+    --json) output_json=1; shift ;;
     --dry-run) dry_run=1; shift ;;
     --refresh-model-cache) refresh_model_cache=1; shift ;;
     --max-continues) [ "$#" -ge 2 ] || die "--max-continues requires a value"; max_continues="$2"; shift 2 ;;
@@ -550,6 +593,23 @@ case "$subcmd" in
 esac
 skill_ref="$RESOLVED_SKILL_REF"
 resume_skill_ref="$RESOLVED_RESUME_SKILL_REF"
+if [ "$subcmd" = "run" ] || [ "$subcmd" = "resume" ]; then
+  preflight_or_die
+  ensure_model_availability_path || true
+else
+  ensure_model_config_path >/dev/null 2>&1 || true
+  ensure_model_availability_path >/dev/null 2>&1 || true
+fi
+if [ "$subcmd" = "status" ] && [ "$output_json" -eq 1 ]; then
+  helper="$(helper_path run_snapshot.py || true)"
+  [ -n "$helper" ] || helper="$REPO_ROOT/scripts/run_snapshot.py"
+  exec python3 "$helper" --workspace "$PWD" --run-id "$payload_text"
+fi
+if [ "$subcmd" = "prompt" ] && [ "$output_json" -eq 1 ]; then
+  helper="$(helper_path compile_longrun_prompt.py || true)"
+  [ -n "$helper" ] || helper="$REPO_ROOT/scripts/compile_longrun_prompt.py"
+  exec python3 "$helper" --text "$payload_text"
+fi
 if [ -z "$model" ]; then
   probe_model_cache preferred "$refresh_model_cache" >/dev/null 2>&1 || true
 fi
@@ -567,6 +627,10 @@ if [ ${#PLUGIN_ARGS[@]:-0} -gt 0 ]; then
 fi
 [ -n "$model" ] && supervisor_cmd+=(--explicit-model "$model")
 [ "$refresh_model_cache" -eq 1 ] && supervisor_cmd+=(--refresh-model-cache)
+
+if [ "$output_json" -eq 1 ] && [ "$detach" -ne 1 ] && { [ "$subcmd" = "run" ] || [ "$subcmd" = "resume" ]; }; then
+  die "--json for $subcmd currently requires --detach"
+fi
 
 if [ "$dry_run" -eq 1 ]; then
   actual_cmd=("$COPILOT_REAL_BIN")

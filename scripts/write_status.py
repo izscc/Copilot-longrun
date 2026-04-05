@@ -22,6 +22,7 @@ from _longrun_lib import (  # noqa: E402
     resolve_run_target,
     status_path,
     shallow_merge,
+    sync_operator_tasks,
     sync_plan_markdown,
     write_json_atomic,
 )
@@ -64,6 +65,7 @@ def main() -> int:
         patch = parse_json_argument(args.patch_json, {})
         payload = shallow_merge(current, patch)
     payload = refresh_artifact_inventory(target, ensure_status_defaults(payload))
+    payload = sync_operator_tasks(target, payload, checkpoint=str(payload.get("phase") or "status-write"))
     payload["runId"] = target.run_id
     payload["updatedAt"] = now_iso()
     write_json_atomic(path, payload)
