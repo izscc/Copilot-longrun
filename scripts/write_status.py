@@ -13,10 +13,12 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from _longrun_lib import (  # noqa: E402
     LongRunError,
     ensure_dir,
+    ensure_status_defaults,
     init_status_payload,
     now_iso,
     parse_json_argument,
     read_json,
+    refresh_artifact_inventory,
     resolve_run_target,
     status_path,
     shallow_merge,
@@ -61,6 +63,7 @@ def main() -> int:
         current = read_json(path, {})
         patch = parse_json_argument(args.patch_json, {})
         payload = shallow_merge(current, patch)
+    payload = refresh_artifact_inventory(target, ensure_status_defaults(payload))
     payload["runId"] = target.run_id
     payload["updatedAt"] = now_iso()
     write_json_atomic(path, payload)

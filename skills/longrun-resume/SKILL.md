@@ -19,13 +19,13 @@ disable-model-invocation: false
 - `plan.md`
 - `status.json`
 - `journal.jsonl`
-- `final-summary.md`（若存在）
+- `COMPLETION.md` 或 `final-summary.md`（若存在）
 - `hook-events.jsonl` 尾部（仅在需要解释错误时）
 
 ## 3. Resume rules
 - 若 `status.state` 已是 `complete`，默认只读，不重跑。
 - 若 `status.state` 已是 `blocked`，先解释阻塞原因，只在用户明确要求 reopen 时才继续。
-- 若 deliverable 已存在、`final-summary.md` 缺失或 `status.json` 仍是 `running`，优先做**本地验证 + finalize 收敛**，不要重新做已完成工作。
+- 若 deliverable 已存在、`COMPLETION.md` / `final-summary.md` 缺失或 `status.json` 仍是 `running`，优先做**本地验证 + finalize 收敛**，不要重新做已完成工作。
 - 只有在产物未完成时，才继续未完成 workstreams。
 
 ## 4. 恢复策略

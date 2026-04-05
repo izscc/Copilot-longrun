@@ -27,8 +27,14 @@ def main() -> int:
         print('OK' if result.get('ok') else 'FAIL')
         for item in result.get('deliverables', []):
             print(f'deliverable: {item}')
-        for finding in result.get('findings', []):
-            print(f'finding: {finding}')
+        for finding in result.get('hardFailures', []):
+            print(f'hard-failure: {finding}')
+        for finding in result.get('driftFindings', []):
+            print(f'drift-finding: {finding}')
+        for finding in result.get('softWarnings', []):
+            print(f'soft-warning: {finding}')
+        if result.get('recommendedAction'):
+            print(f"recommended-action: {result.get('recommendedAction')}")
     return 0 if result.get('ok') else 1
 
 

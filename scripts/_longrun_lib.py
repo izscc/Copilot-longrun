@@ -173,8 +173,18 @@ def sources_path(target: RunTarget) -> Path:
     return target.run_dir / "sources.jsonl"
 
 
-def final_summary_path(target: RunTarget) -> Path:
+def completion_path(target: RunTarget) -> Path:
+    return target.run_dir / "COMPLETION.md"
+
+
+def legacy_completion_path(target: RunTarget) -> Path:
     return target.run_dir / "final-summary.md"
+
+
+def final_summary_path(target: RunTarget) -> Path:
+    # Backward-compatible alias. Prefer legacy path if it already exists.
+    legacy = legacy_completion_path(target)
+    return legacy if legacy.exists() else completion_path(target)
 
 
 def active_run_file(base: Path) -> Path:
@@ -418,6 +428,204 @@ def allowed_default_capabilities(profile: str) -> list[str]:
     return ["local-files", "shell"]
 
 
+def default_visible_name_style(language: str | None) -> str:
+    return "简体中文" if (language or "zh-CN") == "zh-CN" else "native"
+
+
+def resolve_artifact_path(target: RunTarget, item: str | Path) -> Path:
+    raw = Path(str(item))
+    if raw.is_absolute():
+        return raw
+    run_candidate = (target.run_dir / raw).resolve()
+    if run_candidate.exists():
+        return run_candidate
+    workspace_candidate = (target.workspace / raw).resolve()
+    if workspace_candidate.exists():
+        return workspace_candidate
+    if str(raw).startswith("artifacts/"):
+        return run_candidate
+    return workspace_candidate
+
+
+def display_artifact_path(target: RunTarget, path: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(target.run_dir.resolve())).replace("\\", "/")
+    except ValueError:
+        pass
+    try:
+        return str(path.resolve().relative_to(target.workspace.resolve())).replace("\\", "/")
+    except ValueError:
+        return str(path)
+
+
+def artifact_id_for_path(path_text: str) -> str:
+    digest = hashlib.sha1(path_text.encode("utf-8")).hexdigest()[:12]
+    stem = Path(path_text).stem
+    if re.search(r"[\u4e00-\u9fff]", stem):
+        prefix = "artifact"
+    else:
+        prefix = slugify(stem, max_len=24)
+    return f"{prefix}-{digest}" if prefix else f"artifact-{digest}"
+
+
+def ensure_status_defaults(status: dict[str, Any] | None) -> dict[str, Any]:
+    payload = copy.deepcopy(status or {})
+    payload.setdefault("deliverables", [])
+    payload.setdefault("completedWorkstreams", [])
+    payload.setdefault("activeWorkstreams", [])
+    payload.setdefault("fallbackChain", [])
+    payload.setdefault("lastError", None)
+    payload.setdefault("artifacts", [])
+    payload.setdefault("verification", {})
+    verification = payload.get("verification") or {}
+    verification.setdefault("state", "pending")
+    verification.setdefault("hardFailures", [])
+    verification.setdefault("softWarnings", [])
+    verification.setdefault("driftFindings", [])
+    verification.setdefault("recommendedAction", "continue")
+    verification.setdefault("failureClass", None)
+    verification.setdefault("lastVerifiedAt", None)
+    payload["verification"] = verification
+    recovery = payload.get("recoveryState") or {}
+    recovery.setdefault("phaseAttempts", {})
+    recovery.setdefault("backoffHistoryMinutes", [])
+    recovery.setdefault("failureClass", None)
+    recovery.setdefault("retryCount", 0)
+    recovery.setdefault("lastRecommendedAction", None)
+    payload["recoveryState"] = recovery
+    language = payload.get("language") or "zh-CN"
+    naming = payload.get("naming") or {}
+    naming.setdefault("defaultLocale", language)
+    naming.setdefault("defaultVisibleNameStyle", default_visible_name_style(language))
+    payload["naming"] = naming
+    return payload
+
+
+def refresh_artifact_inventory(target: RunTarget, status: dict[str, Any] | None) -> dict[str, Any]:
+    payload = ensure_status_defaults(status)
+    existing_by_key: dict[str, dict[str, Any]] = {}
+    for item in payload.get("artifacts") or []:
+        if not isinstance(item, dict):
+            continue
+        key = item.get("path") or item.get("id")
+        if key:
+            existing_by_key[str(key)] = copy.deepcopy(item)
+
+    deliverables = [str(item) for item in payload.get("deliverables") or [] if item]
+    discovered_paths: dict[str, Path] = {}
+
+    artifacts_dir = target.run_dir / "artifacts"
+    if artifacts_dir.exists():
+        for path in sorted(p for p in artifacts_dir.rglob("*") if p.is_file()):
+            rel = display_artifact_path(target, path)
+            discovered_paths[rel] = path
+
+    for item in deliverables:
+        path = resolve_artifact_path(target, item)
+        discovered_paths.setdefault(item, path)
+
+    profile = payload.get("profile")
+    records: list[dict[str, Any]] = []
+    for rel in sorted(discovered_paths):
+        path = discovered_paths[rel]
+        prior = existing_by_key.get(rel, {})
+        state = "present" if path.exists() and path.is_file() and path.stat().st_size > 0 else "missing"
+        required = bool(prior.get("required")) or rel in deliverables
+        source_requirement = prior.get("sourceRequirement")
+        if not source_requirement:
+            if profile in {"research", "office"} and rel.startswith("artifacts/"):
+                source_requirement = "recommended"
+            else:
+                source_requirement = "none"
+        records.append({
+            "id": prior.get("id") or artifact_id_for_path(rel),
+            "path": rel,
+            "displayName": prior.get("displayName") or Path(rel).stem,
+            "role": prior.get("role") or ("deliverable" if rel in deliverables else "artifact"),
+            "required": required,
+            "sourceRequirement": source_requirement,
+            "state": state,
+        })
+
+    payload["artifacts"] = records
+    return payload
+
+
+def infer_completed_workstreams(target: RunTarget, status: dict[str, Any]) -> list[str]:
+    existing = [str(item) for item in status.get("completedWorkstreams") or [] if item]
+    if existing:
+        return existing
+    discovered: list[str] = []
+    for item in status.get("artifacts") or []:
+        if not isinstance(item, dict) or item.get("state") != "present":
+            continue
+        path_text = str(item.get("path") or "")
+        if path_text.startswith("artifacts/"):
+            remainder = path_text[len("artifacts/") :]
+            token = remainder.split("/", 1)[0] if remainder else ""
+            label = "artifacts-top-level" if not token or token.endswith(".md") else token
+        else:
+            label = "deliverables"
+        if label not in discovered:
+            discovered.append(label)
+    if status.get("state") in {"complete", "blocked"} and "finalize" not in discovered:
+        discovered.append("finalize")
+    return discovered
+
+
+def remove_duplicate_status_sections(plan_text: str) -> str:
+    if "## LongRun Status Board" not in plan_text:
+        return plan_text
+    managed_removed = re.sub(
+        re.escape(MANAGED_PLAN_START) + r".*?" + re.escape(MANAGED_PLAN_END),
+        "",
+        plan_text,
+        count=1,
+        flags=re.S,
+    )
+    if "## LongRun Status Board" not in managed_removed:
+        return plan_text
+    cleaned_unmanaged = re.sub(
+        r"\n## LongRun Status Board\n.*?(?=\n## [^\n]+|\Z)",
+        "\n",
+        managed_removed,
+        flags=re.S,
+    )
+    board_match = re.search(
+        re.escape(MANAGED_PLAN_START) + r".*?" + re.escape(MANAGED_PLAN_END),
+        plan_text,
+        flags=re.S,
+    )
+    if board_match:
+        prefix = plan_text[: board_match.start()]
+        board = board_match.group(0)
+        suffix = cleaned_unmanaged
+        return (prefix + board + suffix).strip() + "\n"
+    return cleaned_unmanaged.strip() + "\n"
+
+
+def classify_failure(
+    hard_failures: Iterable[str] | None = None,
+    drift_findings: Iterable[str] | None = None,
+    *,
+    last_error: str | None = None,
+) -> tuple[str | None, str]:
+    issues = " ".join([*(hard_failures or []), *(drift_findings or []), last_error or ""]).lower()
+    if "dangerous shell expansion" in issues:
+        return "shell_block", "rewrite shell checks to helper-first or python heredoc, then retry verify"
+    if "plan.md" in issues or "active-run-id" in issues or "drift" in issues or "duplicate unmanaged status" in issues:
+        return "state_drift", "run reconcile_run.py before the next verify/finalize"
+    if "sources.jsonl" in issues or "source" in issues:
+        return "source_gap", "run harvest_sources.py, then re-run reconcile_run.py and verify_run.py"
+    if "missing deliverable" in issues or "deliverable" in issues:
+        return "verification_gap", "fix deliverable paths or produce the missing deliverable before finalize"
+    if extract_rate_limit(issues):
+        return "rate_limited", "wait for backoff or fallback model recovery, then retry"
+    if issues.strip():
+        return "tool_failure", "inspect the last failed step and retry with a smaller change"
+    return None, "continue"
+
+
 def canonical_phase_name(value: str | None) -> str:
     token = (value or "").strip().lower()
     mapping = {
@@ -465,7 +673,7 @@ def _status_board_lines(target: RunTarget, status: dict[str, Any]) -> list[str]:
         box = "x" if checked else " "
         lines.append(f"- [{box}] {labels[phase]}")
 
-    completed = list(status.get("completedWorkstreams") or [])
+    completed = list(status.get("completedWorkstreams") or infer_completed_workstreams(target, status))
     active = list(status.get("activeWorkstreams") or [])
     if completed or active:
         lines.extend(["", "### Workstream Progress"])
@@ -489,9 +697,9 @@ def _status_board_lines(target: RunTarget, status: dict[str, Any]) -> list[str]:
 
 
 def sync_plan_markdown(target: RunTarget, status: dict[str, Any] | None = None) -> Path:
-    status_obj = status or read_json(status_path(target), {})
+    status_obj = refresh_artifact_inventory(target, status or read_json(status_path(target), {}))
     plan_file = target.run_dir / "plan.md"
-    original = read_text(plan_file, "").strip()
+    original = remove_duplicate_status_sections(read_text(plan_file, "")).strip()
     board = "\n".join(_status_board_lines(target, status_obj)).strip()
     if MANAGED_PLAN_START in original and MANAGED_PLAN_END in original:
         updated = re.sub(
@@ -516,11 +724,24 @@ def sync_plan_markdown(target: RunTarget, status: dict[str, Any] | None = None) 
 
 
 def plan_sync_findings(target: RunTarget, status: dict[str, Any] | None = None) -> list[str]:
-    status_obj = status or read_json(status_path(target), {})
+    status_obj = refresh_artifact_inventory(target, status or read_json(status_path(target), {}))
     findings: list[str] = []
     plan_text = read_text(target.run_dir / "plan.md", "")
     if MANAGED_PLAN_START not in plan_text or MANAGED_PLAN_END not in plan_text:
         findings.append("plan.md is missing the managed LongRun status board")
+    unmanaged = re.sub(
+        re.escape(MANAGED_PLAN_START) + r".*?" + re.escape(MANAGED_PLAN_END),
+        "",
+        plan_text,
+        count=1,
+        flags=re.S,
+    )
+    if "## LongRun Status Board" in unmanaged:
+        findings.append("plan.md contains duplicate unmanaged status sections")
+    if re.search(r"^\| State \| running \|", unmanaged, flags=re.M):
+        findings.append("plan.md contains stale running state outside the managed board")
+    if re.search(r"^- \[ \] (Explore|Plan|Execute|Verify|Recover|Finalize)", unmanaged, flags=re.M):
+        findings.append("plan.md contains unchecked stale phase items outside the managed board")
     if status_obj.get("state") in {"complete", "blocked"}:
         if list(status_obj.get("activeWorkstreams") or []):
             findings.append("status is finalized but activeWorkstreams is not empty")
@@ -532,20 +753,20 @@ def plan_sync_findings(target: RunTarget, status: dict[str, Any] | None = None) 
     return findings
 
 
-def local_verify(target: RunTarget) -> dict[str, Any]:
-    status = read_json(status_path(target), {})
+def local_verify(target: RunTarget, status_override: dict[str, Any] | None = None) -> dict[str, Any]:
+    status = refresh_artifact_inventory(target, status_override or read_json(status_path(target), {}))
     deliverables = status.get("deliverables") or []
     deliverables = [deliverables] if isinstance(deliverables, str) else deliverables
-    findings: list[str] = []
-    ok = True
+    hard_failures: list[str] = []
+    soft_warnings: list[str] = []
+    drift_findings: list[str] = []
     existing: list[str] = []
     for item in deliverables:
-        path = (target.workspace / item).resolve() if not str(item).startswith("/") else Path(item)
+        path = resolve_artifact_path(target, item)
         if path.exists() and path.is_file() and path.stat().st_size > 0:
             existing.append(str(path))
         else:
-            ok = False
-            findings.append(f"missing deliverable: {item}")
+            hard_failures.append(f"missing deliverable: {item}")
     profile = status.get("profile")
     if profile in {"research", "office"}:
         src = sources_path(target)
@@ -553,38 +774,39 @@ def local_verify(target: RunTarget) -> dict[str, Any]:
         src_count = 0
         if src.exists():
             src_count = len([line for line in src.read_text(encoding="utf-8").splitlines() if line.strip()])
-        artifact_count = len(list(artifacts_dir.glob("*.md"))) if artifacts_dir.exists() else 0
-        if src_count < 2:
-            ok = False
-            findings.append("sources.jsonl has fewer than 2 entries")
+        artifact_count = len(list(p for p in artifacts_dir.rglob("*.md"))) if artifacts_dir.exists() else 0
+        source_modes = {str((item or {}).get("sourceRequirement") or "none") for item in status.get("artifacts") or [] if isinstance(item, dict)}
+        source_required = profile == "research" or "required" in source_modes
+        source_recommended = source_required or profile == "office" or "recommended" in source_modes
+        if src_count < 1 and source_required:
+            hard_failures.append("sources.jsonl has no recorded entries")
+        elif src_count < 1 and source_recommended:
+            soft_warnings.append("sources.jsonl has no recorded entries")
         if artifact_count < 1:
-            ok = False
-            findings.append("artifacts directory has no markdown workstream outputs")
-        for artifact in sorted(artifacts_dir.glob("*.md")) if artifacts_dir.exists() else []:
-            text = read_text(artifact, "")
-            if "## Sources" not in text and "## 来源" not in text and "### 核心来源" not in text:
-                ok = False
-                findings.append(f"{artifact.name} is missing a Sources section")
-            if not re.search(r"^##?\s*(Findings|结论|研究摘要|关键洞察|研究背景)\b", text, flags=re.M):
-                ok = False
-                findings.append(f"{artifact.name} is missing a Findings/summary section")
-            has_evidence = bool(re.search(r"^##?\s*(Evidence|证据)\b", text, flags=re.M))
-            has_open_questions = bool(re.search(r"^##?\s*(Open Questions|待确认问题)\b", text, flags=re.M))
-            if not (has_evidence or has_open_questions or len(re.findall(r"https?://\S+", text)) >= 2):
-                ok = False
-                findings.append(f"{artifact.name} is missing evidence/open-questions structure")
-    for finding in plan_sync_findings(target, status):
-        ok = False
-        findings.append(finding)
-    final_summary = final_summary_path(target)
-    if status.get("state") in {"complete", "blocked"} and not final_summary.exists():
-        ok = False
-        findings.append("final-summary.md is missing for finalized run")
+            hard_failures.append("artifacts directory has no markdown workstream outputs")
+    drift_findings.extend(plan_sync_findings(target, status))
+    completion = completion_path(target)
+    legacy_completion = legacy_completion_path(target)
+    if status.get("state") in {"complete", "blocked"} and not completion.exists() and not legacy_completion.exists():
+        hard_failures.append("COMPLETION.md is missing for finalized run")
+    elif status.get("state") in {"complete", "blocked"} and legacy_completion.exists() and not completion.exists():
+        soft_warnings.append("legacy final-summary.md exists without COMPLETION.md")
+    failure_class, recommended_action = classify_failure(
+        hard_failures,
+        drift_findings,
+        last_error=((status.get("lastError") or {}).get("message") if isinstance(status.get("lastError"), dict) else str(status.get("lastError") or "")),
+    )
+    ok = not hard_failures and not drift_findings
     return {
         "ok": ok,
         "deliverables": existing,
-        "findings": findings,
-        "finalSummaryExists": final_summary.exists(),
+        "findings": [*hard_failures, *soft_warnings, *drift_findings],
+        "hardFailures": hard_failures,
+        "softWarnings": soft_warnings,
+        "driftFindings": drift_findings,
+        "recommendedAction": recommended_action,
+        "failureClass": failure_class,
+        "completionExists": completion.exists() or legacy_completion.exists(),
     }
 
 
@@ -655,7 +877,7 @@ def init_status_payload(
         control_mode = model_control_mode or "session-inherited"
         fallback = []
         reason = "session-inherited"
-    return {
+    return ensure_status_defaults({
         "runId": run_id,
         "state": "running",
         "phase": "init",
@@ -685,12 +907,32 @@ def init_status_payload(
         "deliverables": [],
         "completedWorkstreams": [],
         "activeWorkstreams": [],
+        "artifacts": [],
         "lastError": None,
-        "recoveryState": {"phaseAttempts": {}, "backoffHistoryMinutes": []},
+        "verification": {
+            "state": "pending",
+            "hardFailures": [],
+            "softWarnings": [],
+            "driftFindings": [],
+            "recommendedAction": "continue",
+            "failureClass": None,
+            "lastVerifiedAt": None,
+        },
+        "recoveryState": {
+            "phaseAttempts": {},
+            "backoffHistoryMinutes": [],
+            "failureClass": None,
+            "retryCount": 0,
+            "lastRecommendedAction": None,
+        },
+        "naming": {
+            "defaultLocale": language,
+            "defaultVisibleNameStyle": default_visible_name_style(language),
+        },
         "allowedCapabilities": allowed_default_capabilities(profile),
         "createdAt": now_iso(),
         "updatedAt": now_iso(),
-    }
+    })
 
 
 def cli_workspace_and_run(parser: argparse.ArgumentParser) -> None:

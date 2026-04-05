@@ -18,7 +18,7 @@ disable-model-invocation: false
 1. `status.json`
 2. `mission.md`
 3. `plan.md`
-4. `final-summary.md`（若存在）
+4. `COMPLETION.md` 或 `final-summary.md`（若存在）
 5. `journal.jsonl` 尾部
 6. `hook-events.jsonl` 尾部（仅在需要解释错误/限流时）
 7. `sources.jsonl` 和 `artifacts/` 列表（仅在 research / office 时）
@@ -36,7 +36,7 @@ disable-model-invocation: false
 - 下一步
 - 是否 `resumable` / `complete` / `blocked`
 
-如果 `status.json` 仍是 `running`，但 `final-summary.md` 已存在，或 deliverables 已完成，明确指出这是**脏状态**，建议用 `/longrun-resume latest` 进行收敛式 finalize，而不是从头重跑。
+如果 `status.json` 仍是 `running`，但 `COMPLETION.md` / `final-summary.md` 已存在，或 deliverables 已完成，明确指出这是**脏状态**，建议用 `/longrun-resume latest` 进行收敛式 finalize，而不是从头重跑。
 
 如果出现以下任一情况，也要明确指出是**脏状态 / state drift**：
 - `status=complete` 但 `deliverables` 为空

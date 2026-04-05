@@ -13,7 +13,9 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from _longrun_lib import (  # noqa: E402
     LongRunError,
+    classify_failure,
     display_model_name,
+    ensure_status_defaults,
     extract_rate_limit,
     load_model_config,
     local_verify,
@@ -90,7 +92,7 @@ def patch_latest_run(workspace: Path, *, selected_model: str, fallback_reason: s
     except LongRunError:
         return
     status_file = status_path(target)
-    status = read_json(status_file, {})
+    status = ensure_status_defaults(read_json(status_file, {}))
     if not status:
         return
     status["selectedModel"] = selected_model
@@ -108,16 +110,53 @@ def patch_latest_run(workspace: Path, *, selected_model: str, fallback_reason: s
     write_json_atomic(status_file, status)
 
 
+def patch_recovery_hint(workspace: Path, *, message: str, failure_class: str | None = None, recommended_action: str | None = None) -> None:
+    try:
+        target = resolve_run_target(workspace, "latest")
+    except LongRunError:
+        return
+    status_file = status_path(target)
+    status = ensure_status_defaults(read_json(status_file, {}))
+    if not status:
+        return
+    status["lastError"] = {"message": message, "ts": now_iso()}
+    recovery = status.get("recoveryState") or {}
+    recovery["failureClass"] = failure_class
+    recovery["lastRecommendedAction"] = recommended_action
+    recovery["retryCount"] = int(recovery.get("retryCount") or 0) + 1
+    status["recoveryState"] = recovery
+    status["updatedAt"] = now_iso()
+    write_json_atomic(status_file, status)
+
+
 def auto_finalize_if_possible(workspace: Path, note: str) -> bool:
     try:
         target = resolve_run_target(workspace, "latest")
     except LongRunError:
         return False
+    subprocess.run([
+        sys.executable,
+        str(SCRIPT_DIR / "harvest_sources.py"),
+        "--workspace", str(workspace),
+        "--run-id", target.run_id,
+    ], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run([
+        sys.executable,
+        str(SCRIPT_DIR / "reconcile_run.py"),
+        "--workspace", str(workspace),
+        "--run-id", target.run_id,
+    ], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     status = read_json(status_path(target), {})
     if status.get("state") == "complete":
         return True
     verification = local_verify(target)
     if not verification.get("ok") or not verification.get("deliverables"):
+        patch_recovery_hint(
+            workspace,
+            message="auto-finalize precheck did not pass local verification",
+            failure_class=verification.get("failureClass"),
+            recommended_action=verification.get("recommendedAction"),
+        )
         return False
     finalize = SCRIPT_DIR / "finalize_run.py"
     subprocess.run([
@@ -202,7 +241,11 @@ def main() -> int:
         if auto_finalize_if_possible(workspace, f"launcher observed: {fallback_reason or 'non-zero exit after deliverable verification'}"):
             return 0
         if not fallback_reason:
+            failure_class, recommended = classify_failure(last_error=output)
+            patch_recovery_hint(workspace, message="launcher run failed without model fallback", failure_class=failure_class, recommended_action=recommended)
             return rc or 1
+        _, recommended = classify_failure(last_error=fallback_reason)
+        patch_recovery_hint(workspace, message=fallback_reason, failure_class=fallback_reason.replace("-", "_"), recommended_action=recommended)
         patch_latest_run(workspace, selected_model=model, fallback_reason=fallback_reason)
         if args.mode in {"run", "resume"} and args.resume_skill_ref:
             current_skill = args.resume_skill_ref
@@ -225,6 +268,8 @@ def main() -> int:
                 return 0
             if auto_finalize_if_possible(workspace, f"launcher recovered after {note}"):
                 return 0
+            _, recommended = classify_failure(last_error=retry_reason or fallback_reason)
+            patch_recovery_hint(workspace, message=retry_reason or fallback_reason, failure_class=(retry_reason or fallback_reason or "").replace("-", "_") or None, recommended_action=recommended)
             patch_latest_run(workspace, selected_model=model, fallback_reason=retry_reason or fallback_reason)
             if not retry_reason:
                 return rc or 1

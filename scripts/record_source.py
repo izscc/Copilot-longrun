@@ -9,7 +9,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from _longrun_lib import append_jsonl, now_iso, resolve_run_target, sources_path, stable_source_id  # noqa: E402
+from _longrun_lib import append_jsonl, now_iso, read_text, resolve_run_target, sources_path, stable_source_id  # noqa: E402
 
 
 def main() -> int:
@@ -32,7 +32,21 @@ def main() -> int:
         "capturedAt": now_iso(),
         "usedIn": args.used_in,
     }
-    append_jsonl(sources_path(target), payload)
+    existing = set()
+    src_path = sources_path(target)
+    for line in read_text(src_path, "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        key = (obj.get("id"), obj.get("url"), obj.get("usedIn"))
+        existing.add(key)
+    key = (payload["id"], payload["url"], payload["usedIn"])
+    if key not in existing:
+        append_jsonl(src_path, payload)
     print(json.dumps(payload, ensure_ascii=False))
     return 0
 

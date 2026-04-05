@@ -8,22 +8,26 @@ LongRun 是一套围绕 **GitHub Copilot CLI** 构建的长跑编排插件与跨
 
 - 在 Copilot CLI 内，可直接调用：`/longrun`、`/longrun-prompt`、`/longrun-resume`、`/longrun-status`
 - 在 **Codex / Claude Code / 其他 shell-capable coding agents** 中，可通过统一 launcher 把任务转交给 Copilot CLI 长跑
-- 默认升级为 **vNext 可靠内核**：任务画像、原子状态写入、artifact/sources 落盘、plan 同步、finalize 硬收敛、latest-available-opus 模型策略、rate limit 自动恢复
+- 默认采用**轻架构内核**：`status.json` 单一真值、artifact/sources 落盘、plan 受管投影、reconcile/verify/finalize 闭环、latest-available-opus 模型策略、事件驱动轻恢复
 
 ---
 
 ## 项目定位
 
-LongRun 不是“再写一个魔法 prompt”，而是把 GitHub Copilot CLI 的 agent 能力组织成一个**可恢复任务系统**：
+LongRun 不是“再写一个魔法 prompt”，也不是沉重的平台层。  
+它的定位是：把 GitHub Copilot CLI 的 agent 能力组织成一个**轻量、可恢复、可收敛**的任务内核。
 
 - **单入口**：`/longrun`
 - **任务画像**：`coding | research | office`
 - **状态机**：`explore -> plan -> execute -> verify -> recover -> finalize`
+- **唯一真值源**：`status.json`
 - **中间产物**：`artifacts/*.md`
 - **证据链**：`sources.jsonl`
-- **自动恢复**：限流后优先 fallback model，再 backoff
-- **硬收敛**：最终必须产出 `final-summary.md`，并把 run 置为 `complete` 或 `blocked`
-- **计划同步**：`plan.md` 顶部由 helper 维护一个 `LongRun Status Board`
+- **计划投影**：`plan.md` 顶部由 helper 维护 `LongRun Status Board`
+- **默认不接管**：`task-list.md` 仅在任务明确需要时 opt-in
+- **自动恢复**：优先 `reconcile -> harvest_sources -> verify -> finalize`
+- **硬收敛**：helper 收尾写入 `COMPLETION.md`，并把 run 置为 `complete` 或 `blocked`
+- **默认命名**：用户可见输出文件默认使用简体中文名；控制文件保持英文稳定名
 
 ---
 
@@ -98,18 +102,16 @@ longrun "<任务描述>"
 
 ## vNext 内核亮点
 
-### 1. 单入口 + 自动任务画像
+### 1. 轻架构内核
 
-`/longrun` 会先把任务编译成统一 Mission Contract，并记录：
+当前版本刻意保持简洁：
 
-- `profile`: `coding | research | office`
-- `complexity`: `single-lane | parallel | fleet`
-- `language`: 跟随用户，默认中文优先
-- `evidenceMode`: `balanced`
-- `modelPolicy`: `latest-available-opus-first`
-- `modelPreference`: 若用户显式指定模型则尊重
+- 不引入额外的“CEO 层 / 编译器层 / 知识库层”
+- 不额外引入独立 `artifact-manifest.json`
+- 不把任务正文模板写死进插件规则
+- 只把**闭环所需的最小机制**留在内核里
 
-### 2. 更可靠的 run-state
+### 2. `status.json` 是唯一真值源
 
 每个 run 目录固定为：
 
@@ -127,23 +129,45 @@ longrun "<任务描述>"
     ├── sources.jsonl
     ├── artifacts/
     ├── policy.json
-    └── final-summary.md
+    └── COMPLETION.md         # helper 自己的收尾输出
 ```
 
-`plan.md` 顶部会由 helper 维护一个机器同步的状态区块：
-- 当前 phase
-- workstream 勾选状态
-- deliverables 勾选状态
+`status.json` 内维护最小但完整的通用字段：
+- `state`
+- `phase`
+- `deliverables`
+- `completedWorkstreams`
+- `activeWorkstreams`
+- `verification`
+- `recoveryState`
+- `artifacts`
+- `naming`
 
-它和 `status.json` 必须保持一致，不再允许“任务完成但 plan 仍全未勾选”。
+`plan.md` 只是默认受管投影；`task-list.md` 默认不是内核真值源。
 
-### 3. 原子状态写入 helpers
+### 3. 受管 plan + 轻量漂移修复
+
+`plan.md` 顶部由 helper 维护唯一的 `LongRun Status Board`。  
+如果发现以下情况，会被视为 drift：
+- 缺少受管状态区块
+- 同时存在第二份手写 `LongRun Status Board`
+- run 已 finalize，但仍残留 `running`
+
+新增两个轻量 helper：
+- `harvest_sources.py`
+- `reconcile_run.py`
+
+它们用于在 finalize 前做“补账 + 对账”，而不是引入更重的平台结构。
+
+### 4. 原子状态写入 helpers
 
 LongRun 不再鼓励用脆弱的 shell `echo '{...}'` 写 JSON，而是通过 helper bundle 统一写状态：
 
 - `write_status.py`
 - `write_journal.py`
 - `record_source.py`
+- `harvest_sources.py`
+- `reconcile_run.py`
 - `update_plan_md.py`
 - `verify_run.py`
 - `finalize_run.py`
@@ -157,24 +181,44 @@ helper bundle 默认安装到：
 ~/.copilot-mission-control/bin/
 ```
 
-### 4. finalize 硬收敛
+### 5. finalize 是真正的闸门
 
-未来 run 不应再出现这种脏状态：
-- 报告已经产出
-- 但 `status.json` 仍然是 `running`
-- `active-run-id` 还残留
+`finalize_run.py --status complete --local-verify` 在本地校验失败时，默认不会再把 run 写成 `complete`。  
+只有显式 `--force-complete` 才允许带风险完成，并会在 `status.json.verification` 中留下失败痕迹。
 
-LongRun vNext 要求所有任务最终都走 `finalize_run.py` 收尾。
+helper 自己的收尾输出固定写到 `COMPLETION.md`，不再覆盖用户任务自己的 `final-summary.md`。
 
-### 5. research / office 强制证据链
+### 6. 事件驱动的轻自适应
 
-对研究/办公任务：
-- 每个 workstream 必须落盘到 `artifacts/*.md`
-- 每个一级章节至少 2 个来源
-- 关键数字/关键判断必须带引用
-- 文末必须生成 `## Sources Appendix`
+LongRun 不做每轮全局重思考，只在这些事件触发轻量恢复：
+- verify fail
+- shell block
+- sources 缺失
+- 状态漂移
+- deliverable 已在但账本未同步
+- 连续失败且没有新信息
 
-默认**不双语输出**；只有用户明确要求双语才双语。
+默认恢复顺序：
+1. `reconcile_run.py`
+2. `harvest_sources.py`
+3. `verify_run.py`
+4. 再决定继续执行、`finalize complete` 或 `finalize blocked`
+
+### 7. 默认中文输出命名
+
+用户可见输出文件默认使用**简体中文文件名**，例如：
+- `任务总览.md`
+- `执行计划.md`
+- `来源附录.md`
+- `最终总结.md`
+
+控制文件仍保持英文稳定名：
+- `mission.md`
+- `plan.md`
+- `status.json`
+- `journal.jsonl`
+- `sources.jsonl`
+- `COMPLETION.md`
 
 ---
 
