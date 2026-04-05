@@ -1,7 +1,7 @@
 {
   "name": "copilot-mission-control",
-  "description": "LongRun bridges GitHub Copilot CLI with skills, hooks, and cross-agent launchers so one prompt can drive resumable long-running missions.",
-  "version": "0.6.1",
+  "description": "LongRun turns GitHub Copilot CLI into a resumable long-running mission backend with task profiling, atomic state, Opus-first model routing, and cross-agent launchers.",
+  "version": "0.7.0",
   "author": {
     "name": "zscc.in",
     "url": "https://github.com/zscc"
@@ -22,7 +22,12 @@
     "doctor",
     "wrapper-commands",
     "codex",
-    "claude-code"
+    "claude-code",
+    "opus-first",
+    "atomic-state",
+    "sources",
+    "artifacts",
+    "finalize"
   ],
   "category": "Productivity",
   "tags": [

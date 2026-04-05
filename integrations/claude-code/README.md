@@ -1,18 +1,15 @@
 # Claude Code adapter
 
-如果你的 Claude Code 支持自定义命令，把本目录下的命令文件安装到 `~/.claude/commands/` 后，就可以把 `/longrun` 这一类命令转发给本地 `copilot-longrun` 后端。
+Claude Code 推荐把 LongRun 当作外部执行后端：**Claude Code 只转发，Copilot CLI 真正长跑。**
 
 ## 安装
 
 ```bash
-bash scripts/install-agent-adapters.sh
-# 或显式只装 Claude Code：
 bash scripts/install-agent-adapters.sh --agent claude
 bash scripts/install-global-launcher.sh
+bash scripts/install-bare-commands.sh
 copilot-longrun doctor
 ```
-
-> `install-agent-adapters.sh` 会优先按当前环境自动识别可用 agent，并把 Claude Code 命令模板 **复制**到 `~/.claude/commands/`，而不是建立 symlink。
 
 ## 已提供命令模板
 
@@ -23,7 +20,7 @@ copilot-longrun doctor
 
 ## 后端 contract
 
-这些命令实际调用的是：
+这些命令实际转发到：
 
 ```bash
 longrun "<任务描述>"
@@ -32,4 +29,7 @@ longrun-resume latest
 longrun-status latest
 ```
 
-LongRun shell 包装器会再转发到 GitHub Copilot CLI，并默认附带更适合长跑的参数：`--autopilot --yolo --no-ask-user`。
+LongRun launcher 默认：
+- 使用 `--autopilot --yolo --no-ask-user`
+- 采用 **Opus-first** 模型策略
+- 在模型限流时自动回退或退避

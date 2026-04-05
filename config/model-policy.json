@@ -1,0 +1,43 @@
+{
+  "defaultPolicy": "opus-first",
+  "preferred": [
+    "claude-opus-4.6",
+    "claude-opus-4.5"
+  ],
+  "fallback": [
+    "claude-sonnet-4.6",
+    "claude-sonnet-4.5",
+    "gpt-5.4",
+    "gemini-3.1-pro"
+  ],
+  "backoffMinutes": [2, 5, 10],
+  "displayNames": {
+    "claude-opus-4.6": "Claude Opus 4.6",
+    "claude-opus-4.5": "Claude Opus 4.5",
+    "claude-sonnet-4.6": "Claude Sonnet 4.6",
+    "claude-sonnet-4.5": "Claude Sonnet 4.5",
+    "gpt-5.4": "GPT-5.4",
+    "gemini-3.1-pro": "Gemini 3.1 Pro"
+  },
+  "aliases": {
+    "opus": "claude-opus-4.6",
+    "opus 4.6": "claude-opus-4.6",
+    "claude opus 4.6": "claude-opus-4.6",
+    "claude-opus-4.6": "claude-opus-4.6",
+    "opus 4.5": "claude-opus-4.5",
+    "claude opus 4.5": "claude-opus-4.5",
+    "claude-opus-4.5": "claude-opus-4.5",
+    "sonnet": "claude-sonnet-4.6",
+    "sonnet 4.6": "claude-sonnet-4.6",
+    "claude sonnet 4.6": "claude-sonnet-4.6",
+    "claude-sonnet-4.6": "claude-sonnet-4.6",
+    "sonnet 4.5": "claude-sonnet-4.5",
+    "claude sonnet 4.5": "claude-sonnet-4.5",
+    "claude-sonnet-4.5": "claude-sonnet-4.5",
+    "gpt 5.4": "gpt-5.4",
+    "gpt-5.4": "gpt-5.4",
+    "gemini 3.1": "gemini-3.1-pro",
+    "gemini 3.1 pro": "gemini-3.1-pro",
+    "gemini-3.1-pro": "gemini-3.1-pro"
+  }
+}

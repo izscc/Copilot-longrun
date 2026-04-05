@@ -2,6 +2,9 @@
 set -euo pipefail
 
 PLUGIN_NAME="copilot-mission-control"
+LONGRUN_HOME="${LONGRUN_HOME:-$HOME/.copilot-mission-control}"
+HELPER_BIN_DIR="$LONGRUN_HOME/bin"
+HELPER_CONFIG_DIR="$LONGRUN_HOME/config"
 
 log() {
   printf '%s\n' "$*"
@@ -70,7 +73,7 @@ fi
 TARGET_SKILLS_DIR="$HOME/.copilot/skills"
 TARGET_AGENTS_DIR="$HOME/.copilot/agents"
 
-mkdir -p "$TARGET_SKILLS_DIR" "$TARGET_AGENTS_DIR"
+mkdir -p "$TARGET_SKILLS_DIR" "$TARGET_AGENTS_DIR" "$HELPER_BIN_DIR" "$HELPER_CONFIG_DIR"
 
 for skill_dir in "$ROOT_DIR"/skills/*; do
   [ -d "$skill_dir" ] || continue
@@ -88,6 +91,15 @@ for agent_file in "$ROOT_DIR"/agents/*.md; do
   log "Installed personal agent (copied): $agent_name -> $target"
 done
 
+for helper in _longrun_lib.py write_journal.py write_status.py record_source.py finalize_run.py hook_event.py selftest_longrun.py launch_supervisor.py model_policy_info.py; do
+  install_copied_file "$ROOT_DIR/scripts/$helper" "$HELPER_BIN_DIR/$helper"
+  chmod +x "$HELPER_BIN_DIR/$helper"
+  log "Installed LongRun helper: $HELPER_BIN_DIR/$helper"
+done
+
+install_copied_file "$ROOT_DIR/config/model-policy.json" "$HELPER_CONFIG_DIR/model-policy.json"
+log "Installed model policy: $HELPER_CONFIG_DIR/model-policy.json"
+
 cat <<EOF2
 
 Done.
@@ -97,6 +109,9 @@ You can now invoke these bare commands in Copilot CLI:
   /longrun-prompt
   /longrun-resume
   /longrun-status
+
+LongRun helper bundle:
+  $HELPER_BIN_DIR
 
 Recommended next steps:
   1. bash "$ROOT_DIR/scripts/install-global-launcher.sh"

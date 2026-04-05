@@ -2,6 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LONGRUN_HOME="${LONGRUN_HOME:-$HOME/.copilot-mission-control}"
+
 mkdir -p "$HOME/.local/bin"
 
 backup_if_needed() {
@@ -33,5 +35,12 @@ printf '  longrun-status\n'
 printf '  longrun-doctor\n'
 printf '\nIf needed, add this to your shell config:\n'
 printf '  export PATH="$HOME/.local/bin:$PATH"\n'
-printf '\nRunning environment doctor...\n\n'
-"$HOME/.local/bin/copilot-longrun" doctor || true
+printf '\nReminder: bare skills + helper bundle should also be installed via:\n'
+printf '  bash %s/scripts/install-bare-commands.sh\n' "$ROOT_DIR"
+
+if [ -d "$LONGRUN_HOME/bin" ] && [ -f "$LONGRUN_HOME/bin/selftest_longrun.py" ]; then
+  printf '\nRunning environment doctor...\n\n'
+  "$HOME/.local/bin/copilot-longrun" doctor || true
+else
+  printf '\nLongRun helper bundle not detected yet; skip doctor for now.\n'
+fi
