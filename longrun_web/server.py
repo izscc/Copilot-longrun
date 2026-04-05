@@ -19,8 +19,10 @@ from .control_plane import (
     reconcile_run,
     resume_run,
     run_detail,
+    set_workspace_root,
     stream_snapshots,
     verify_run,
+    workspace_snapshot,
     workspace_root,
     write_operator_request,
 )
@@ -85,6 +87,10 @@ class PromptOverrideRequest(BaseModel):
     payload: Dict[str, Any]
 
 
+class WorkspaceRequest(BaseModel):
+    workspace: str
+
+
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
     return templates.TemplateResponse(
@@ -100,6 +106,19 @@ def index(request: Request):
 @app.get("/api/doctor")
 def api_doctor():
     return JSONResponse(doctor_snapshot())
+
+
+@app.get("/api/workspace")
+def api_workspace():
+    return JSONResponse(workspace_snapshot())
+
+
+@app.post("/api/workspace")
+def api_workspace_set(payload: WorkspaceRequest):
+    try:
+        return JSONResponse({"ok": True, **set_workspace_root(payload.workspace)})
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @app.get("/api/ai/profiles")

@@ -7,122 +7,211 @@
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-  <header>
-    <h1>LongRun Web Beta</h1>
-    <p>工作区：<code id="workspace">{{ workspace }}</code></p>
-  </header>
-
-  <main class="grid">
-    <section class="card">
-      <h2>环境检测</h2>
-      <button onclick="refreshDoctor()">刷新 Doctor</button>
-      <pre id="doctorBox">加载中...</pre>
-    </section>
-
-    <section class="card">
-      <h2>AI 配置</h2>
-      <div class="form-grid">
-        <label>名称<input id="aiName" value="default"></label>
-        <label>Base URL<input id="aiBaseUrl" value="https://api.zscc.in/v1"></label>
-        <label>API Key<input id="aiKey" type="password"></label>
-        <label>模型<input id="aiModel"></label>
-        <label><input id="aiDefault" type="checkbox" checked> 设为默认</label>
-      </div>
-      <div class="actions">
-        <button onclick="saveAiProfile()">保存配置</button>
-        <button onclick="testAiProfile()">测试连接</button>
-        <button onclick="loadModels()">拉取模型</button>
-      </div>
-      <pre id="aiBox"></pre>
-    </section>
-
-    <section class="card wide">
-      <h2>Prompt Compiler</h2>
-      <label>Prompt Pack
-        <select id="packVersion">
-          {% for version in pack_versions %}<option value="{{ version }}">{{ version }}</option>{% endfor %}
-        </select>
-      </label>
-      <textarea id="taskInput" rows="8" placeholder="输入初始任务或继续补充的任务信息"></textarea>
-      <div class="actions">
-        <button onclick="buildDraft('initial_compile')">本地草案</button>
-        <button onclick="refineDraft('initial_compile')">AI 一键优化</button>
-        <button onclick="finalizePrompt()">生成最终 Prompt</button>
-        <button onclick="launchRun()">发起长跑</button>
-      </div>
-      <div class="split">
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand-block">
+        <div class="brand-mark">L</div>
         <div>
-          <h3>Mission Draft</h3>
-          <pre id="draftBox"></pre>
-        </div>
-        <div>
-          <h3>Compiled Prompt</h3>
-          <textarea id="compiledPromptBox" rows="18"></textarea>
+          <div class="brand-title">LongRun</div>
+          <div class="brand-subtitle">Web Beta 工作台</div>
         </div>
       </div>
-    </section>
 
-    <section class="card">
-      <h2>Run 列表</h2>
-      <button onclick="refreshRuns()">刷新 Runs</button>
-      <ul id="runsList"></ul>
-    </section>
-
-    <section class="card wide">
-      <h2>当前 Run 详情</h2>
-      <div class="actions">
-        <button onclick="reconcileCurrent()">Reconcile</button>
-        <button onclick="verifyCurrent()">Verify</button>
-        <button onclick="resumeCurrent()">Resume</button>
-        <button onclick="finalizeCurrent('complete')">Finalize Complete</button>
-        <button onclick="finalizeCurrent('blocked')">Finalize Blocked</button>
-      </div>
-      <pre id="runSummaryBox">请选择一个 run</pre>
-      <div class="split">
-        <div>
-          <h3>Plan</h3>
-          <pre id="planBox"></pre>
+      <section class="sidebar-card">
+        <div class="sidebar-label">工作区</div>
+        <input id="workspaceInput" list="workspaceSuggestions" placeholder="输入或选择工作区路径">
+        <datalist id="workspaceSuggestions"></datalist>
+        <div class="inline-actions">
+          <button class="btn btn-primary" onclick="applyWorkspace()">切换工作区</button>
+          <button class="btn btn-ghost" onclick="loadWorkspaceInfo()">刷新</button>
         </div>
-        <div>
-          <h3>日志尾部</h3>
-          <pre id="logBox"></pre>
+        <div class="workspace-tip" id="workspaceHint">自动读取当前工作区</div>
+      </section>
+
+      <nav class="sidebar-nav">
+        <button id="nav-home" class="nav-item active" onclick="switchTab('home')">任务编排</button>
+        <button id="nav-runs" class="nav-item" onclick="switchTab('runs')">运行监控</button>
+        <button id="nav-operator" class="nav-item" onclick="switchTab('operator')">追加任务</button>
+        <button id="nav-ai" class="nav-item" onclick="switchTab('ai')">AI 配置</button>
+        <button id="nav-doctor" class="nav-item" onclick="switchTab('doctor')">环境检测</button>
+      </nav>
+
+      <section class="sidebar-runs">
+        <div class="sidebar-section-title">最近 Runs</div>
+        <ul id="runsList" class="runs-list"></ul>
+      </section>
+
+      <div class="sidebar-footer">
+        <div class="footer-title">当前 Prompt Pack</div>
+        <div class="footer-inline">
+          <select id="packVersion">
+            {% for version in pack_versions %}<option value="{{ version }}">{{ version }}</option>{% endfor %}
+          </select>
         </div>
       </div>
-    </section>
+    </aside>
 
-    <section class="card wide">
-      <h2>追加任务 / 中途插话</h2>
-      <p>说明：追加请求写入 <code>operator-inbox.md</code>，由 LongRun 在检查点吸收，不会实时打断当前会话。</p>
-      <textarea id="appendInput" rows="5" placeholder="输入追加任务、调整计划或澄清要求"></textarea>
-      <div class="actions">
-        <button onclick="refineAppendTask()">AI 优化追加任务</button>
-        <button onclick="submitAppendTask()">写入 operator-inbox</button>
-      </div>
-      <pre id="appendBox"></pre>
-    </section>
+    <main class="main-shell">
+      <header class="topbar">
+        <div>
+          <div class="topbar-title" id="tabTitle">任务编排</div>
+          <div class="topbar-subtitle" id="tabSubtitle">先优化任务，再启动 LongRun 长跑。</div>
+        </div>
+        <div class="workspace-badge" id="workspaceBadge">{{ workspace }}</div>
+      </header>
 
-    <section class="card wide">
-      <h2>追加任务队列</h2>
-      <label>筛选状态
-        <select id="taskFilter" onchange="renderOperatorTasks()">
-          <option value="all">全部</option>
-          <option value="pending">待处理</option>
-          <option value="accepted">已接收</option>
-          <option value="applied">已吸收</option>
-          <option value="scheduled">已排队</option>
-          <option value="in_progress">进行中</option>
-          <option value="done">已完成</option>
-          <option value="blocked">已阻塞</option>
-          <option value="rejected">已拒绝</option>
-          <option value="superseded">已覆盖</option>
-        </select>
-      </label>
-      <table>
-        <thead><tr><th>标题</th><th>类型</th><th>状态</th><th>优先级</th><th>摘要</th></tr></thead>
-        <tbody id="operatorTasksBody"></tbody>
-      </table>
-    </section>
-  </main>
+      <section id="tab-home" class="tab-panel active">
+        <div class="hero-panel">
+          <div class="hero-eyebrow">LongRun Prompt Compiler</div>
+          <h1>这次你想推进什么长跑任务？</h1>
+          <p>先把原始需求优化成适合 LongRun 的任务描述，再一键启动无人值守长跑。</p>
+          <div class="composer-card">
+            <textarea id="taskInput" rows="5" placeholder="输入初始任务，或继续补充约束、交付物、限制条件……"></textarea>
+            <div class="composer-actions">
+              <button class="btn btn-secondary" onclick="buildDraft('initial_compile')">本地草案</button>
+              <button class="btn btn-primary" onclick="refineDraft('initial_compile')">AI 一键优化</button>
+              <button class="btn btn-secondary" onclick="finalizePrompt()">生成最终 Prompt</button>
+              <button class="btn btn-dark" onclick="launchRun()">发起长跑</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="content-grid">
+          <section class="panel">
+            <div class="panel-title">Mission Draft</div>
+            <pre id="draftBox">等待生成任务草案…</pre>
+          </section>
+          <section class="panel">
+            <div class="panel-title">Compiled Prompt</div>
+            <textarea id="compiledPromptBox" rows="18" placeholder="这里会出现适合 LongRun 的最终 Prompt"></textarea>
+          </section>
+        </div>
+      </section>
+
+      <section id="tab-runs" class="tab-panel">
+        <div class="section-head">
+          <div>
+            <div class="section-title">运行监控</div>
+            <div class="section-desc">查看当前 run 状态、计划投影、日志尾部与收敛动作。</div>
+          </div>
+          <div class="inline-actions">
+            <button class="btn btn-ghost" onclick="refreshRuns()">刷新 Runs</button>
+            <button class="btn btn-secondary" onclick="reconcileCurrent()">Reconcile</button>
+            <button class="btn btn-secondary" onclick="verifyCurrent()">Verify</button>
+            <button class="btn btn-secondary" onclick="resumeCurrent()">Resume</button>
+            <button class="btn btn-primary" onclick="finalizeCurrent('complete')">Finalize Complete</button>
+            <button class="btn btn-danger" onclick="finalizeCurrent('blocked')">Finalize Blocked</button>
+          </div>
+        </div>
+
+        <div class="content-grid">
+          <section class="panel">
+            <div class="panel-title">Run 状态</div>
+            <pre id="runSummaryBox">请选择左侧一个 run</pre>
+          </section>
+          <section class="panel">
+            <div class="panel-title">日志尾部</div>
+            <pre id="logBox">暂无日志</pre>
+          </section>
+        </div>
+
+        <div class="content-grid">
+          <section class="panel">
+            <div class="panel-title">Plan</div>
+            <pre id="planBox">暂无计划</pre>
+          </section>
+          <section class="panel">
+            <div class="panel-title">Mission / Completion</div>
+            <pre id="missionBox">暂无内容</pre>
+          </section>
+        </div>
+      </section>
+
+      <section id="tab-operator" class="tab-panel">
+        <div class="section-head">
+          <div>
+            <div class="section-title">追加任务</div>
+            <div class="section-desc">追加请求会写入 <code>operator-inbox.md</code>，并在检查点被吸收为 <code>operatorTasks[]</code>。</div>
+          </div>
+        </div>
+
+        <section class="panel panel-tight">
+          <textarea id="appendInput" rows="5" placeholder="输入追加任务、调整计划或澄清要求"></textarea>
+          <div class="inline-actions top-gap">
+            <button class="btn btn-secondary" onclick="refineAppendTask()">AI 优化追加任务</button>
+            <button class="btn btn-primary" onclick="submitAppendTask()">写入 operator-inbox</button>
+          </div>
+          <pre id="appendBox">等待追加任务请求…</pre>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title panel-title-row">
+            <span>追加任务队列</span>
+            <label class="filter-inline">筛选状态
+              <select id="taskFilter" onchange="renderOperatorTasks()">
+                <option value="all">全部</option>
+                <option value="pending">待处理</option>
+                <option value="accepted">已接收</option>
+                <option value="applied">已吸收</option>
+                <option value="scheduled">已排队</option>
+                <option value="in_progress">进行中</option>
+                <option value="done">已完成</option>
+                <option value="blocked">已阻塞</option>
+                <option value="rejected">已拒绝</option>
+                <option value="superseded">已覆盖</option>
+              </select>
+            </label>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>标题</th><th>类型</th><th>状态</th><th>优先级</th><th>摘要</th></tr>
+              </thead>
+              <tbody id="operatorTasksBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section id="tab-ai" class="tab-panel">
+        <div class="section-head">
+          <div>
+            <div class="section-title">AI 配置</div>
+            <div class="section-desc">仅用于 Web Prompt Compiler，不会替代 Copilot CLI 的实际执行模型。</div>
+          </div>
+        </div>
+
+        <section class="panel">
+          <div class="form-grid">
+            <label>配置名称<input id="aiName" value="default"></label>
+            <label>Base URL<input id="aiBaseUrl" value="https://api.zscc.in/v1"></label>
+            <label>API Key<input id="aiKey" type="password"></label>
+            <label>模型<input id="aiModel"></label>
+            <label class="checkbox-line"><input id="aiDefault" type="checkbox" checked> 设为默认配置</label>
+          </div>
+          <div class="inline-actions top-gap">
+            <button class="btn btn-primary" onclick="saveAiProfile()">保存配置</button>
+            <button class="btn btn-secondary" onclick="testAiProfile()">测试连接</button>
+            <button class="btn btn-ghost" onclick="loadModels()">拉取模型</button>
+          </div>
+          <pre id="aiBox">等待 AI 配置操作…</pre>
+        </section>
+      </section>
+
+      <section id="tab-doctor" class="tab-panel">
+        <div class="section-head">
+          <div>
+            <div class="section-title">环境检测</div>
+            <div class="section-desc">检测 Copilot CLI、helper、screen、Prompt Pack 和当前工作区状态。</div>
+          </div>
+          <button class="btn btn-primary" onclick="refreshDoctor()">刷新 Doctor</button>
+        </div>
+        <section class="panel">
+          <pre id="doctorBox">加载中…</pre>
+        </section>
+      </section>
+    </main>
+  </div>
 
   <script src="/static/app.js"></script>
 </body>

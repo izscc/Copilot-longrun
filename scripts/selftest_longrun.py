@@ -305,6 +305,11 @@ def test_web_api_smoke() -> None:
     with tempfile.TemporaryDirectory(prefix="longrun-web-api-") as tmp:
         os.environ["LONGRUN_WEB_WORKSPACE"] = tmp
         client = TestClient(app)
+        workspace = client.get("/api/workspace")
+        assert workspace.status_code == 200
+        assert Path(workspace.json()["activeWorkspace"]).resolve() == Path(tmp).resolve()
+        workspace_set = client.post("/api/workspace", json={"workspace": tmp})
+        assert workspace_set.status_code == 200
         doctor = client.get("/api/doctor")
         assert doctor.status_code == 200
         draft = client.post("/api/compiler/draft", json={"text": "请输出中文任务总览"})

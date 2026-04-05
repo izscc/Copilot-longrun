@@ -8,11 +8,67 @@ import uuid
 from pathlib import Path
 from typing import Any, Iterator
 
-from .bridge import REPO_ROOT, longrun_lib
+from .bridge import LONGRUN_HOME, REPO_ROOT, longrun_lib
+
+WORKSPACE_STATE_PATH = LONGRUN_HOME / "web" / "workspace-state.json"
+
+
+def _load_workspace_state() -> dict[str, Any]:
+    if not WORKSPACE_STATE_PATH.exists():
+        return {"activeWorkspace": None, "recentWorkspaces": []}
+    try:
+        return json.loads(WORKSPACE_STATE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {"activeWorkspace": None, "recentWorkspaces": []}
+
+
+def _save_workspace_state(payload: dict[str, Any]) -> None:
+    WORKSPACE_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    WORKSPACE_STATE_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _merge_workspaces(*values: str) -> list[str]:
+    merged: list[str] = []
+    for value in values:
+        if not value:
+            continue
+        if value not in merged:
+            merged.append(value)
+    return merged[:12]
+
+
+def _active_workspace_candidate() -> Path:
+    state = _load_workspace_state()
+    raw = os.environ.get("LONGRUN_WEB_WORKSPACE") or state.get("activeWorkspace") or os.getcwd()
+    return Path(str(raw)).expanduser().resolve()
+
+
+def workspace_snapshot() -> dict[str, Any]:
+    active = _active_workspace_candidate()
+    state = _load_workspace_state()
+    recent = _merge_workspaces(str(active), *(state.get("recentWorkspaces") or []), str(REPO_ROOT), str(Path.home()))
+    payload = {"activeWorkspace": str(active), "recentWorkspaces": recent, "repoRoot": str(REPO_ROOT)}
+    _save_workspace_state(payload)
+    return payload
 
 
 def workspace_root() -> Path:
-    return Path(os.environ.get("LONGRUN_WEB_WORKSPACE", os.getcwd())).expanduser().resolve()
+    return Path(workspace_snapshot()["activeWorkspace"]).resolve()
+
+
+def set_workspace_root(path_text: str) -> dict[str, Any]:
+    target = Path(path_text).expanduser().resolve()
+    if not target.exists() or not target.is_dir():
+        raise FileNotFoundError(f"workspace does not exist: {target}")
+    os.environ["LONGRUN_WEB_WORKSPACE"] = str(target)
+    state = _load_workspace_state()
+    payload = {
+        "activeWorkspace": str(target),
+        "recentWorkspaces": _merge_workspaces(str(target), *(state.get("recentWorkspaces") or []), str(REPO_ROOT), str(Path.home())),
+        "repoRoot": str(REPO_ROOT),
+    }
+    _save_workspace_state(payload)
+    return payload
 
 
 def launcher_dir(workspace: Path | None = None) -> Path:
