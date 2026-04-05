@@ -17,8 +17,10 @@ from _longrun_lib import (  # noqa: E402
     extract_rate_limit,
     load_model_config,
     local_verify,
+    model_availability_snapshot,
     now_iso,
     read_json,
+    read_model_availability,
     resolve_run_target,
     status_path,
     validate_model_config,
@@ -28,6 +30,7 @@ from _longrun_lib import (  # noqa: E402
 MODEL_FALLBACK_PATTERNS = [
     ("model-unavailable", "unknown model"),
     ("model-unavailable", "invalid model"),
+    ("model-unavailable", "from --model flag is not available"),
     ("model-unavailable", "not available to your account"),
     ("model-unavailable", "you do not have access"),
     ("model-unavailable", "cannot use model"),
@@ -48,10 +51,14 @@ def build_command(args, skill_ref: str, payload: str, model: str) -> list[str]:
     return cmd
 
 
-def run_and_stream(cmd: list[str], cwd: Path) -> tuple[int, str]:
+def run_and_stream(cmd: list[str], cwd: Path, env_patch: dict[str, str] | None = None) -> tuple[int, str]:
+    env = os.environ.copy()
+    if env_patch:
+        env.update(env_patch)
     process = subprocess.Popen(
         cmd,
         cwd=str(cwd),
+        env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -87,6 +94,7 @@ def patch_latest_run(workspace: Path, *, selected_model: str, fallback_reason: s
     if not status:
         return
     status["selectedModel"] = selected_model
+    status["modelControlMode"] = "launcher-enforced"
     history = list(status.get("modelAttemptHistory") or [])
     history.append({
         "ts": now_iso(),
@@ -157,6 +165,8 @@ def main() -> int:
     parser.add_argument("--max-continues", default="100")
     parser.add_argument("--explicit-model")
     parser.add_argument("--model-config")
+    parser.add_argument("--availability-cache")
+    parser.add_argument("--refresh-model-cache", action="store_true")
     parser.add_argument("--plugin-arg", action="append", default=[])
     args = parser.parse_args()
 
@@ -171,7 +181,9 @@ def main() -> int:
     # Imported lazily to avoid circular import churn in summary contexts.
     from _longrun_lib import model_chain  # noqa: E402
 
-    chain = model_chain(config, explicit_model=args.explicit_model, prompt_text=args.payload)
+    availability_cache = read_model_availability(args.availability_cache)
+    availability = model_availability_snapshot(config, cache=availability_cache)
+    chain = model_chain(config, explicit_model=args.explicit_model, prompt_text=args.payload, availability=availability)
     current_skill = args.skill_ref
     current_payload = args.payload
 
@@ -180,7 +192,10 @@ def main() -> int:
         print(f"[LongRun] attempt {index + 1}/{len(chain)} with model: {human} ({model})")
         patch_latest_run(workspace, selected_model=model, note="launcher-attempt")
         cmd = build_command(args, current_skill, current_payload, model)
-        rc, output = run_and_stream(cmd, workspace)
+        rc, output = run_and_stream(cmd, workspace, {
+            "LONGRUN_SELECTED_MODEL": model,
+            "LONGRUN_MODEL_CONTROL_MODE": "launcher-enforced",
+        })
         fallback_reason = detect_fallback_reason(output)
         if rc == 0 and not fallback_reason:
             return 0
@@ -201,7 +216,10 @@ def main() -> int:
             print(f"[LongRun] {note}")
             time.sleep(backoff * 60)
             retry_cmd = build_command(args, current_skill, current_payload, model)
-            rc, output = run_and_stream(retry_cmd, workspace)
+            rc, output = run_and_stream(retry_cmd, workspace, {
+                "LONGRUN_SELECTED_MODEL": model,
+                "LONGRUN_MODEL_CONTROL_MODE": "launcher-enforced",
+            })
             retry_reason = detect_fallback_reason(output)
             if rc == 0 and not retry_reason:
                 return 0

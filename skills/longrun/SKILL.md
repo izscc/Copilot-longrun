@@ -16,7 +16,10 @@ disable-model-invocation: false
 - `$HOME/.copilot-mission-control/bin/write_status.py`
 - `$HOME/.copilot-mission-control/bin/write_journal.py`
 - `$HOME/.copilot-mission-control/bin/record_source.py`
+- `$HOME/.copilot-mission-control/bin/update_plan_md.py`
+- `$HOME/.copilot-mission-control/bin/verify_run.py`
 - `$HOME/.copilot-mission-control/bin/finalize_run.py`
+- `$HOME/.copilot-mission-control/bin/probe_models.py`
 
 如果这些 helpers 缺失：
 - 不要继续伪装成稳定长跑系统；
@@ -53,8 +56,9 @@ disable-model-invocation: false
 - `complexity`: `single-lane | parallel | fleet`
 - `language`: 默认跟随用户，未指定时中文优先
 - `evidenceMode`: 固定 `balanced`
-- `modelPolicy`: 固定 `opus-first`
+- `modelPolicy`: 固定 `latest-available-opus-first`
 - `modelPreference`: 若用户显式指定模型则记录
+- `modelControlMode`: `session-inherited | launcher-enforced | explicit-session-model`
 
 画像规则：
 - `coding`: 代码、脚本、测试、构建、重构、CI 修复
@@ -77,6 +81,16 @@ python3 "$HOME/.copilot-mission-control/bin/write_status.py" \
   --explicit-model "<若用户显式指定>"
 ```
 
+模型语义必须严格：
+- 如果当前 session 是 launcher 启动的，并且环境里存在：
+  - `LONGRUN_SELECTED_MODEL`
+  - `LONGRUN_MODEL_CONTROL_MODE`
+  则允许把 `selectedModel` 记录为真实模型。
+- 如果这是普通 raw `/longrun` session，且你无法证明当前 Copilot session 的真实模型：
+  - `selectedModel` 必须记为 `session-inherited`
+  - `modelControlMode` 必须记为 `session-inherited`
+- 不允许再把 raw `/longrun` 的状态伪装成 `claude-opus-4.6` 或 `claude-opus-4.5`。
+
 随后补齐：
 - `phase`
 - `summary`
@@ -86,13 +100,13 @@ python3 "$HOME/.copilot-mission-control/bin/write_status.py" \
 - `lastError`
 - `recoveryState`
 
-默认模型链：
-1. `claude-opus-4.6`
-2. `claude-opus-4.5`
-3. `claude-sonnet-4.6`
-4. `claude-sonnet-4.5`
-5. `gpt-5.4`
-6. `gemini-3.1-pro`
+launcher 的默认模型链不是写死 4.6，而是：
+- **先用当前账号可用的最新 Opus**
+- 若无可用 Opus，再走：
+  1. `claude-sonnet-4.6`
+  2. `claude-sonnet-4.5`
+  3. `gpt-5.4`
+  4. `gemini-3.1-pro`
 
 如果用户明确指定模型，优先按用户要求执行；仅在不可用或限流时降级。
 
@@ -107,7 +121,13 @@ python3 "$HOME/.copilot-mission-control/bin/write_status.py" \
 - 每个 workstream 预期 artifact
 - COMPLETE / BLOCKED 停止条件
 
-每完成一个阶段或子任务，都要同步勾选或更新 `plan.md`。
+`plan.md` 不再只是说明文档。每次 `write_status.py` 或 finalize 后，都要保证：
+- 顶部存在 `LongRun Status Board`
+- phase 勾选与 `status.json` 同步
+- workstream 勾选与 `completedWorkstreams` / `activeWorkstreams` 同步
+- deliverable 勾选与 `deliverables` 同步
+
+如果 `plan.md` 未同步，就视为状态漂移（state drift）。
 
 ## 3. 执行阶段机
 
@@ -140,10 +160,11 @@ journal 只记录业务推进，不记录 hook/tool 噪音。
 每个 workstream **必须**产出中间 artifact 到：
 - `.copilot-mission-control/runs/<run-id>/artifacts/*.md`
 
-每个 artifact 至少包含：
-- `# Findings`
-- `## Evidence`
-- `## Open Questions`
+每个 artifact 至少应包含以下结构之一（接受中英别名）：
+- `Findings / 结论 / 研究摘要 / 关键洞察`
+- `Evidence / 证据`
+- `Open Questions / 待确认问题`
+- `Sources / 来源`
 
 若某个 researcher 只返回了对话结论，但没有 artifact 文件，视为**未完成**。
 
@@ -202,6 +223,14 @@ python3 "$HOME/.copilot-mission-control/bin/record_source.py" \
 
 如果 deliverable 已存在且本地验证通过，不要继续高成本验证，不要为了“更完美”把模型额度打爆。
 
+优先使用：
+```bash
+python3 "$HOME/.copilot-mission-control/bin/verify_run.py" \
+  --workspace "$PWD" \
+  --run-id "<run-id>" \
+  --json
+```
+
 ## 8. 恢复规则
 
 默认策略：**自动恢复到底**。
@@ -240,6 +269,9 @@ finalize 后必须保证：
 - `final-summary.md` 已写入
 - `status.json.state` 为 `complete` 或 `blocked`
 - `state/active-run-id` 已清除（若当前 run 为 active）
+- `deliverables` 非空
+- `activeWorkstreams` 为空
+- `plan.md` 顶部 `LongRun Status Board` 已同步到 Finalize 完成态
 
 不要出现“产物已经做完，但 run 仍然卡在 running”的脏状态。
 

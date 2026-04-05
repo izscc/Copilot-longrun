@@ -20,7 +20,7 @@ disable-model-invocation: false
 - constraints
 - language（默认跟随用户，中文优先）
 - evidence mode（research / office 默认为 `balanced`）
-- model policy（默认 `opus-first`）
+- model policy（默认 `latest-available-opus-first`）
 
 ## 2. 模板选择
 
@@ -66,7 +66,7 @@ longrun "<任务描述>"
 
 若用户明确要原生 Copilot CLI 命令，再给：
 ```bash
-copilot --autopilot --yolo --no-ask-user --model claude-opus-4.6 --max-autopilot-continues <N> -p "/longrun <任务描述>"
+copilot --autopilot --yolo --no-ask-user --model <当前账号可用的最新 Opus> --max-autopilot-continues <N> -p "/longrun <任务描述>"
 ```
 
 `N` 推荐：
@@ -74,7 +74,9 @@ copilot --autopilot --yolo --no-ask-user --model claude-opus-4.6 --max-autopilot
 - Template B -> `50`
 - Template C -> `100`
 
-若 prompt 中显式指定模型，则启动命令应反映该模型；否则默认 `claude-opus-4.6`。
+若 prompt 中显式指定模型，则启动命令应反映该模型；否则：
+- 若已知本机模型缓存结果，使用“当前账号可用的最新 Opus”
+- 若未知，提示先运行 `longrun-doctor` 或 `copilot-longrun doctor` 探测模型能力
 
 ## 6. 注意事项
 

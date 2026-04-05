@@ -1,5 +1,5 @@
 {
-  "defaultPolicy": "opus-first",
+  "defaultPolicy": "latest-available-opus-first",
   "preferred": [
     "claude-opus-4.6",
     "claude-opus-4.5"
@@ -11,6 +11,7 @@
     "gemini-3.1-pro"
   ],
   "backoffMinutes": [2, 5, 10],
+  "availabilityTtlHours": 24,
   "displayNames": {
     "claude-opus-4.6": "Claude Opus 4.6",
     "claude-opus-4.5": "Claude Opus 4.5",

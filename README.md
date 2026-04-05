@@ -8,7 +8,7 @@ LongRun 是一套围绕 **GitHub Copilot CLI** 构建的长跑编排插件与跨
 
 - 在 Copilot CLI 内，可直接调用：`/longrun`、`/longrun-prompt`、`/longrun-resume`、`/longrun-status`
 - 在 **Codex / Claude Code / 其他 shell-capable coding agents** 中，可通过统一 launcher 把任务转交给 Copilot CLI 长跑
-- 默认升级为 **vNext 可靠内核**：任务画像、原子状态写入、artifact/sources 落盘、finalize 硬收敛、Opus-first 模型策略、rate limit 自动恢复
+- 默认升级为 **vNext 可靠内核**：任务画像、原子状态写入、artifact/sources 落盘、plan 同步、finalize 硬收敛、latest-available-opus 模型策略、rate limit 自动恢复
 
 ---
 
@@ -23,6 +23,7 @@ LongRun 不是“再写一个魔法 prompt”，而是把 GitHub Copilot CLI 的
 - **证据链**：`sources.jsonl`
 - **自动恢复**：限流后优先 fallback model，再 backoff
 - **硬收敛**：最终必须产出 `final-summary.md`，并把 run 置为 `complete` 或 `blocked`
+- **计划同步**：`plan.md` 顶部由 helper 维护一个 `LongRun Status Board`
 
 ---
 
@@ -105,7 +106,7 @@ longrun "<任务描述>"
 - `complexity`: `single-lane | parallel | fleet`
 - `language`: 跟随用户，默认中文优先
 - `evidenceMode`: `balanced`
-- `modelPolicy`: `opus-first`
+- `modelPolicy`: `latest-available-opus-first`
 - `modelPreference`: 若用户显式指定模型则尊重
 
 ### 2. 更可靠的 run-state
@@ -129,6 +130,13 @@ longrun "<任务描述>"
     └── final-summary.md
 ```
 
+`plan.md` 顶部会由 helper 维护一个机器同步的状态区块：
+- 当前 phase
+- workstream 勾选状态
+- deliverables 勾选状态
+
+它和 `status.json` 必须保持一致，不再允许“任务完成但 plan 仍全未勾选”。
+
 ### 3. 原子状态写入 helpers
 
 LongRun 不再鼓励用脆弱的 shell `echo '{...}'` 写 JSON，而是通过 helper bundle 统一写状态：
@@ -136,9 +144,12 @@ LongRun 不再鼓励用脆弱的 shell `echo '{...}'` 写 JSON，而是通过 he
 - `write_status.py`
 - `write_journal.py`
 - `record_source.py`
+- `update_plan_md.py`
+- `verify_run.py`
 - `finalize_run.py`
 - `hook_event.py`
 - `launch_supervisor.py`
+- `probe_models.py`
 
 helper bundle 默认安装到：
 
@@ -167,22 +178,36 @@ LongRun vNext 要求所有任务最终都走 `finalize_run.py` 收尾。
 
 ---
 
-## 默认模型策略：Opus-first
+## 默认模型策略：latest available Opus first
 
 LongRun launcher 与 `/longrun` 共享统一模型策略：
 
-1. `Claude Opus 4.6`
-2. `Claude Opus 4.5`
-3. `Claude Sonnet 4.6`
-4. `Claude Sonnet 4.5`
-5. `GPT-5.4`
-6. `Gemini 3.1 Pro`
+1. **先探测当前账号可用的最新 Opus**
+   - 教育账号通常命中 `Claude Opus 4.5`
+   - Pro 账号通常命中 `Claude Opus 4.6`
+2. 若当前账号无可用 Opus，则 fallback：
+   - `Claude Sonnet 4.6`
+   - `Claude Sonnet 4.5`
+   - `GPT-5.4`
+   - `Gemini 3.1 Pro`
 
 ### 规则
 - 若用户 prompt 明确指定模型，优先按用户要求执行
+- launcher 会为当前 Copilot 登录账号缓存模型可用性：
+  - `~/.copilot-mission-control/config/model-availability.json`
 - 若当前模型不可用 / 限流 / 无权限，自动回退到下一模型
 - 若已到回退链末尾，则执行 `2m -> 5m -> 10m` backoff
 - 若 deliverable 已存在且本地校验通过，优先直接 finalize COMPLETE，而不是继续浪费额度
+
+### raw `/longrun` 与 launcher 的区别
+- `longrun "任务"` / `copilot-longrun run ...`  
+  会主动选择**当前账号可用的最新 Opus**
+- `copilot --autopilot ... -p "/longrun ..."`  
+  如果你没有显式传 `--model`，LongRun 会把状态记录为：
+  - `selectedModel: session-inherited`
+  - `modelControlMode: session-inherited`
+
+也就是说：**raw `/longrun` 不会再假装自己强制用了 Opus 4.6。**
 
 ---
 
@@ -219,9 +244,18 @@ copilot-longrun doctor
 - bare skills 是否安装
 - helper bundle 是否安装
 - 模型策略文件是否可读
+- 当前账号可用的最新 Opus
 - detached backend `screen` 是否存在
 - `gh` 是否安装/登录（可选）
 - helper 原子状态 selftest 是否通过
+
+如果你刚切换了 Copilot 账号权益，可主动刷新模型缓存：
+
+```bash
+copilot-longrun doctor --refresh-model-cache
+```
+
+> 注意：模型探测会发送少量轻量请求；LongRun 会把结果缓存到本地，避免每次长跑都重复探测。
 
 ### 必需登录
 
@@ -257,7 +291,7 @@ longrun "<任务描述>"
 - `--autopilot`
 - `--yolo`
 - `--no-ask-user`
-- Opus-first 模型选择
+- latest-available-opus 模型选择
 - rate limit fallback / backoff supervisor
 
 ### 只生成 prompt
@@ -358,6 +392,12 @@ bash scripts/install-agent-adapters.sh
 
 ```bash
 copilot-longrun selftest
+```
+
+### 主动刷新账号模型缓存
+
+```bash
+copilot-longrun doctor --refresh-model-cache
 ```
 
 ### dry-run 查看实际启动命令

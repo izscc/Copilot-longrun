@@ -39,7 +39,7 @@ def main() -> int:
             "--run-id",
             run_id,
             "--replace-json",
-            '{"runId":"%s","state":"running","phase":"research","profile":"research","deliverables":["reports/selftest.md"],"recoveryState":{"phaseAttempts":{}},"completedWorkstreams":["market"],"activeWorkstreams":[],"selectedModel":"claude-opus-4.6","fallbackChain":["claude-opus-4.5"]}' % run_id,
+            '{"runId":"%s","state":"running","phase":"research","profile":"research","deliverables":["reports/selftest.md"],"recoveryState":{"phaseAttempts":{}},"completedWorkstreams":["market"],"activeWorkstreams":[],"selectedModel":"session-inherited","modelControlMode":"session-inherited","fallbackChain":[]}' % run_id,
         ], check=True, stdout=subprocess.DEVNULL)
         subprocess.run([
             sys.executable,
@@ -70,9 +70,11 @@ def main() -> int:
         status = read_json(run_dir / "status.json", {})
         summary = read_text(run_dir / "final-summary.md", "")
         active = read_text(state_dir / "active-run-id", "")
+        plan = read_text(run_dir / "plan.md", "")
         assert status.get("state") == "complete"
         assert "selftest complete" in summary
         assert active == ""
+        assert "LongRun Status Board" in plan
         print("selftest: ok")
         return 0
     finally:

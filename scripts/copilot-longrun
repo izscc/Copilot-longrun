@@ -12,6 +12,7 @@ LONGRUN_HOME="${LONGRUN_HOME:-$HOME/.copilot-mission-control}"
 HELPER_BIN_DIR="$LONGRUN_HOME/bin"
 HELPER_CONFIG_DIR="$LONGRUN_HOME/config"
 MODEL_CONFIG_PATH_DEFAULT="$HELPER_CONFIG_DIR/model-policy.json"
+MODEL_AVAILABILITY_PATH_DEFAULT="$HELPER_CONFIG_DIR/model-availability.json"
 
 resolve_script_dir() {
   local source="${BASH_SOURCE[0]}"
@@ -31,6 +32,7 @@ GH_BIN="${GH_BIN:-$DEFAULT_GH_BIN}"
 SCREEN_BIN="${SCREEN_BIN:-$DEFAULT_SCREEN_BIN}"
 COPILOT_CONFIG_DIR="${COPILOT_CONFIG_DIR:-$HOME/.copilot}"
 MODEL_CONFIG_PATH="$MODEL_CONFIG_PATH_DEFAULT"
+MODEL_AVAILABILITY_PATH="$MODEL_AVAILABILITY_PATH_DEFAULT"
 
 usage() {
   cat <<'USAGE'
@@ -38,17 +40,18 @@ LongRun 让你的Copilot Pro权益得到最大化的价值呈现！
 开发者：zscc.in 知识船仓·公益社区。
 
 Usage:
-  copilot-longrun run [--detach] [--max-continues N] [--model MODEL] [--dry-run] <task>
-  copilot-longrun prompt [--model MODEL] [--dry-run] <task>
-  copilot-longrun resume [--detach] [--max-continues N] [--model MODEL] [--dry-run] [run-id|latest]
-  copilot-longrun status [--model MODEL] [--dry-run] [run-id|latest]
-  copilot-longrun doctor
+  copilot-longrun run [--detach] [--max-continues N] [--model MODEL] [--refresh-model-cache] [--dry-run] <task>
+  copilot-longrun prompt [--model MODEL] [--refresh-model-cache] [--dry-run] <task>
+  copilot-longrun resume [--detach] [--max-continues N] [--model MODEL] [--refresh-model-cache] [--dry-run] [run-id|latest]
+  copilot-longrun status [--model MODEL] [--refresh-model-cache] [--dry-run] [run-id|latest]
+  copilot-longrun doctor [--refresh-model-cache]
   copilot-longrun selftest
   copilot-longrun help
 
 Notes:
-  - 默认模型策略：Claude Opus 4.6 -> Claude Opus 4.5 -> Claude Sonnet 4.6 -> Claude Sonnet 4.5 -> GPT-5.4 -> Gemini 3.1 Pro
+  - 默认模型策略：优先使用当前账号可用的最新 Opus；若无 Opus，再走 Sonnet / GPT-5.4 / Gemini fallback
   - 如果任务文本里显式写了模型（如 Opus / Sonnet / GPT-5.4），launcher 会优先匹配该模型。
+  - 可用 --refresh-model-cache 强制刷新账号模型可用性缓存。
   - 真正保证无人值守的入口是 longrun / copilot-longrun run，它们会附带 --autopilot --yolo --no-ask-user。
 USAGE
 }
@@ -57,6 +60,18 @@ info() { printf '%s\n' "$*"; }
 ok() { printf '[OK] %s\n' "$*"; }
 warn() { printf '[WARN] %s\n' "$*"; }
 fail() { printf '[FAIL] %s\n' "$*"; }
+
+display_model_slug() {
+  case "$1" in
+    claude-opus-4.6) printf 'Claude Opus 4.6\n' ;;
+    claude-opus-4.5) printf 'Claude Opus 4.5\n' ;;
+    claude-sonnet-4.6) printf 'Claude Sonnet 4.6\n' ;;
+    claude-sonnet-4.5) printf 'Claude Sonnet 4.5\n' ;;
+    gpt-5.4) printf 'GPT-5.4\n' ;;
+    gemini-3.1-pro) printf 'Gemini 3.1 Pro\n' ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
 
 die() {
   printf 'Error: %s\n' "$*" >&2
@@ -141,6 +156,19 @@ ensure_model_config_path() {
     return 0
   fi
   return 1
+}
+
+ensure_model_availability_path() {
+  if [ -f "$MODEL_AVAILABILITY_PATH_DEFAULT" ]; then
+    MODEL_AVAILABILITY_PATH="$MODEL_AVAILABILITY_PATH_DEFAULT"
+    return 0
+  fi
+  if [ -f "$REPO_ROOT/config/model-availability.json" ]; then
+    MODEL_AVAILABILITY_PATH="$REPO_ROOT/config/model-availability.json"
+    return 0
+  fi
+  MODEL_AVAILABILITY_PATH="$MODEL_AVAILABILITY_PATH_DEFAULT"
+  return 0
 }
 
 require_copilot() {
@@ -248,9 +276,24 @@ selected_model_for_payload() {
   local helper
   helper="$(helper_path model_policy_info.py || true)"
   [ -n "$helper" ] || return 1
-  local cmd=(python3 "$helper" --config "$MODEL_CONFIG_PATH" --payload "$payload" --json)
+  local cmd=(python3 "$helper" --config "$MODEL_CONFIG_PATH" --availability-cache "$MODEL_AVAILABILITY_PATH" --payload "$payload" --json)
   [ -n "$explicit_model" ] && cmd+=(--explicit-model "$explicit_model")
   "${cmd[@]}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["selected"])'
+}
+
+probe_model_cache() {
+  local scope="${1:-preferred}"
+  local refresh="${2:-0}"
+  shift 2 || true
+  local helper
+  helper="$(helper_path probe_models.py || true)"
+  [ -n "$helper" ] || return 1
+  local cmd=(python3 "$helper" --copilot-bin "$COPILOT_REAL_BIN" --config "$MODEL_CONFIG_PATH" --cache "$MODEL_AVAILABILITY_PATH" --scope "$scope")
+  [ "$refresh" -eq 1 ] && cmd+=(--refresh)
+  if [ "$#" -gt 0 ]; then
+    cmd+=("$@")
+  fi
+  "${cmd[@]}"
 }
 
 write_meta() {
@@ -353,6 +396,7 @@ preflight_or_die() {
 }
 
 doctor() {
+  local refresh_cache="${1:-0}"
   local issues=0
   local copilot_bin="$(copilot_path || true)"
   local gh_bin="$(gh_path || true)"
@@ -362,6 +406,7 @@ doctor() {
   local installed_plugin="$(installed_plugin_root || true)"
   local helper_selftest="$(helper_path selftest_longrun.py || true)"
   local helper_model_info="$(helper_path model_policy_info.py || true)"
+  local helper_probe_models="$(helper_path probe_models.py || true)"
   cat <<'BANNER'
 LongRun 让你的Copilot Pro权益得到最大化的价值呈现！
 开发者：zscc.in 知识船仓·公益社区。
@@ -383,8 +428,21 @@ BANNER
   if [ -d "$HELPER_BIN_DIR" ] && [ -f "$HELPER_BIN_DIR/write_status.py" ]; then ok "LongRun helper bundle 已安装：$HELPER_BIN_DIR"; else fail "LongRun helper bundle 缺失"; info "     安装：bash $REPO_ROOT/scripts/install-bare-commands.sh"; issues=$((issues + 1)); fi
   if ensure_model_config_path; then
     ok "模型策略文件已就绪：$MODEL_CONFIG_PATH"
+    ensure_model_availability_path || true
+    if [ -n "$helper_probe_models" ] && [ -n "$copilot_bin" ] && [ -n "$copilot_login" ]; then
+      if probe_output="$(probe_model_cache preferred "$refresh_cache" --json 2>/dev/null)"; then
+        current_latest="$(printf '%s' "$probe_output" | python3 -c 'import json,sys; obj=json.load(sys.stdin); print(obj.get("latestAvailableOpus") or "none")')"
+        if [ "$current_latest" = "none" ]; then
+          warn "当前账号无可用 Opus，将直接走 Sonnet / GPT / Gemini fallback"
+        else
+          ok "当前账号可用的最新 Opus：$(display_model_slug "$current_latest")"
+        fi
+      else
+        warn "模型可用性探测未成功，默认继续使用缓存/策略顺序"
+      fi
+    fi
     if [ -n "$helper_model_info" ]; then
-      python3 "$helper_model_info" --config "$MODEL_CONFIG_PATH" | sed 's/^/     /'
+      python3 "$helper_model_info" --config "$MODEL_CONFIG_PATH" --availability-cache "$MODEL_AVAILABILITY_PATH" | sed 's/^/     /'
     fi
   else
     fail "未找到 model-policy.json"
@@ -413,7 +471,7 @@ BANNER
   info '  copilot-longrun run --detach "<任务描述>"'
   info '  longrun-status latest'
   info '  longrun-resume latest'
-  printf '\n说明：launcher 默认附带 --autopilot --yolo --no-ask-user，并使用 Opus-first 模型策略。\n'
+  printf '\n说明：launcher 默认附带 --autopilot --yolo --no-ask-user，并优先使用当前账号可用的最新 Opus。\n'
   printf '如果你在一个已打开的普通 Copilot session 里直接手敲 /longrun，它会继承当前 session 权限，不保证无 URL/tool/path 确认弹窗。\n'
   [ "$issues" -eq 0 ]
 }
@@ -423,7 +481,16 @@ shift || true
 case "$subcmd" in
   help|-h|--help) usage; exit 0 ;;
   doctor)
-    doctor
+    refresh_model_cache=0
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --refresh-model-cache) refresh_model_cache=1; shift ;;
+        --) shift; break ;;
+        -*) die "unknown option: $1" ;;
+        *) break ;;
+      esac
+    done
+    doctor "$refresh_model_cache"
     exit $?
     ;;
   selftest)
@@ -435,14 +502,18 @@ esac
 
 preflight_or_die
 
+ensure_model_availability_path || true
+
 model=""
 max_continues="$DEFAULT_MAX_CONTINUES"
 detach=0
 dry_run=0
+refresh_model_cache=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --detach) detach=1; shift ;;
     --dry-run) dry_run=1; shift ;;
+    --refresh-model-cache) refresh_model_cache=1; shift ;;
     --max-continues) [ "$#" -ge 2 ] || die "--max-continues requires a value"; max_continues="$2"; shift 2 ;;
     --model) [ "$#" -ge 2 ] || die "--model requires a value"; model="$2"; shift 2 ;;
     --) shift; break ;;
@@ -479,19 +550,23 @@ case "$subcmd" in
 esac
 skill_ref="$RESOLVED_SKILL_REF"
 resume_skill_ref="$RESOLVED_RESUME_SKILL_REF"
+if [ -z "$model" ]; then
+  probe_model_cache preferred "$refresh_model_cache" >/dev/null 2>&1 || true
+fi
 selected_model="$(selected_model_for_payload "$payload_text" "$model" || true)"
 [ -n "$selected_model" ] || selected_model="$model"
-[ -n "$selected_model" ] || selected_model="claude-opus-4.6"
+[ -n "$selected_model" ] || selected_model="claude-opus-4.5"
 
 SUPERVISOR="$(helper_path launch_supervisor.py || true)"
 [ -n "$SUPERVISOR" ] || die "launch supervisor helper missing. Run bash $REPO_ROOT/scripts/install-bare-commands.sh"
 
-supervisor_cmd=(python3 "$SUPERVISOR" --workspace "$PWD" --copilot-bin "$COPILOT_REAL_BIN" --mode "$subcmd" --skill-ref "$skill_ref" --payload "$payload_text" --max-continues "$max_continues" --model-config "$MODEL_CONFIG_PATH")
+supervisor_cmd=(python3 "$SUPERVISOR" --workspace "$PWD" --copilot-bin "$COPILOT_REAL_BIN" --mode "$subcmd" --skill-ref "$skill_ref" --payload "$payload_text" --max-continues "$max_continues" --model-config "$MODEL_CONFIG_PATH" --availability-cache "$MODEL_AVAILABILITY_PATH")
 [ -n "$resume_skill_ref" ] && supervisor_cmd+=(--resume-skill-ref "$resume_skill_ref")
 if [ ${#PLUGIN_ARGS[@]:-0} -gt 0 ]; then
   for arg in "${PLUGIN_ARGS[@]}"; do supervisor_cmd+=(--plugin-arg "$arg"); done
 fi
 [ -n "$model" ] && supervisor_cmd+=(--explicit-model "$model")
+[ "$refresh_model_cache" -eq 1 ] && supervisor_cmd+=(--refresh-model-cache)
 
 if [ "$dry_run" -eq 1 ]; then
   actual_cmd=("$COPILOT_REAL_BIN")

@@ -91,7 +91,7 @@ for agent_file in "$ROOT_DIR"/agents/*.md; do
   log "Installed personal agent (copied): $agent_name -> $target"
 done
 
-for helper in _longrun_lib.py write_journal.py write_status.py record_source.py finalize_run.py hook_event.py selftest_longrun.py launch_supervisor.py model_policy_info.py; do
+for helper in _longrun_lib.py write_journal.py write_status.py record_source.py finalize_run.py hook_event.py selftest_longrun.py launch_supervisor.py model_policy_info.py update_plan_md.py verify_run.py probe_models.py; do
   install_copied_file "$ROOT_DIR/scripts/$helper" "$HELPER_BIN_DIR/$helper"
   chmod +x "$HELPER_BIN_DIR/$helper"
   log "Installed LongRun helper: $HELPER_BIN_DIR/$helper"
@@ -99,6 +99,12 @@ done
 
 install_copied_file "$ROOT_DIR/config/model-policy.json" "$HELPER_CONFIG_DIR/model-policy.json"
 log "Installed model policy: $HELPER_CONFIG_DIR/model-policy.json"
+if [ ! -f "$HELPER_CONFIG_DIR/model-availability.json" ]; then
+  install_copied_file "$ROOT_DIR/config/model-availability.json" "$HELPER_CONFIG_DIR/model-availability.json"
+  log "Installed model availability cache seed: $HELPER_CONFIG_DIR/model-availability.json"
+else
+  log "Preserved existing model availability cache: $HELPER_CONFIG_DIR/model-availability.json"
+fi
 
 cat <<EOF2
 

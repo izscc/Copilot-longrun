@@ -14,10 +14,12 @@ from _longrun_lib import (  # noqa: E402
     final_summary_path,
     local_verify,
     now_iso,
+    plan_sync_findings,
     read_json,
     resolve_run_target,
     sources_path,
     status_path,
+    sync_plan_markdown,
     write_json_atomic,
     write_text_atomic,
 )
@@ -106,12 +108,18 @@ def main() -> int:
     updated["phase"] = "finalize"
     updated["summary"] = args.headline
     updated["deliverables"] = delivered
+    updated["activeWorkstreams"] = []
     updated["updatedAt"] = now_iso()
     updated["completedAt"] = now_iso()
     if args.status == "blocked":
         updated["lastError"] = updated.get("lastError") or {"message": "; ".join(blockers) if blockers else args.headline}
     write_json_atomic(status_file, updated)
+    sync_plan_markdown(target, updated)
     clear_active_run_if_matches(target)
+    plan_findings = plan_sync_findings(target, updated)
+    if plan_findings and args.status == "complete":
+        updated["lastError"] = {"message": "; ".join(plan_findings)}
+        write_json_atomic(status_file, updated)
     if args.do_print:
         print(json.dumps(updated, ensure_ascii=False, indent=2))
     return 0

@@ -29,6 +29,7 @@ disable-model-invocation: false
 - state / phase
 - profile / complexity
 - selected model / fallback reason（若有）
+- model control mode（`session-inherited | launcher-enforced | explicit-session-model`）
 - 已交付内容
 - 当前 blocker / risk
 - sources / artifacts 覆盖情况（研究/办公任务）
@@ -36,3 +37,10 @@ disable-model-invocation: false
 - 是否 `resumable` / `complete` / `blocked`
 
 如果 `status.json` 仍是 `running`，但 `final-summary.md` 已存在，或 deliverables 已完成，明确指出这是**脏状态**，建议用 `/longrun-resume latest` 进行收敛式 finalize，而不是从头重跑。
+
+如果出现以下任一情况，也要明确指出是**脏状态 / state drift**：
+- `status=complete` 但 `deliverables` 为空
+- `status=complete` 但 `activeWorkstreams` 不为空
+- `status=complete` 但 `.copilot-mission-control/state/active-run-id` 仍指向当前 run
+- `plan.md` 顶部缺少 `LongRun Status Board` 或未和 `status.json` 同步
+- `selectedModel=claude-opus-*`，但 `modelControlMode=session-inherited`

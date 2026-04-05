@@ -14,7 +14,7 @@
 - Delegation mode: <direct | targeted-subagents | fleet>
 - Language: <zh-CN | en-US | user-specified>
 - Evidence mode: balanced
-- Model policy: opus-first
+- Model policy: latest-available-opus-first
 - Model preference: <user-specified model or inferred default>
 
 ## Requested deliverables
