@@ -160,4 +160,4 @@ printf '\nNext steps:\n'
 printf '  1. bash %s/scripts/install-bare-commands.sh\n' "$ROOT_DIR"
 printf '  2. bash %s/scripts/install-global-launcher.sh\n' "$ROOT_DIR"
 printf '  3. copilot login\n'
-printf '  4. copilot-longrun doctor\n'
+printf '  4. longrun-doctor\n'

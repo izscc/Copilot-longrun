@@ -2,7 +2,7 @@
 set -euo pipefail
 
 PLUGIN_NAME="copilot-mission-control"
-PLUGIN_REPO_SLUG="izscc/Copilot-longrun"
+PLUGIN_REPO_SLUG="izscc/LongRun"
 DEFAULT_COPILOT_BIN="copilot"
 DEFAULT_GH_BIN="gh"
 DEFAULT_SCREEN_BIN="screen"
@@ -40,6 +40,13 @@ LongRun 让你的Copilot Pro权益得到最大化的价值呈现！
 开发者：zscc.in 知识船仓·公益社区。
 
 Usage:
+  longrun "<task>"
+  longrun-prompt "<task>"
+  longrun-resume [run-id|latest]
+  longrun-status [run-id|latest]
+  longrun-doctor [--refresh-model-cache]
+
+Advanced / compatibility:
   copilot-longrun run [--detach] [--max-continues N] [--model MODEL] [--refresh-model-cache] [--dry-run] <task>
   copilot-longrun prompt [--model MODEL] [--refresh-model-cache] [--dry-run] <task>
   copilot-longrun resume [--detach] [--max-continues N] [--model MODEL] [--refresh-model-cache] [--dry-run] [run-id|latest]
@@ -52,7 +59,7 @@ Notes:
   - 默认模型策略：优先使用当前账号可用的最新 Opus；若无 Opus，再走 Sonnet / GPT-5.4 / Gemini fallback
   - 如果任务文本里显式写了模型（如 Opus / Sonnet / GPT-5.4），launcher 会优先匹配该模型。
   - 可用 --refresh-model-cache 强制刷新账号模型可用性缓存。
-  - 真正保证无人值守的入口是 longrun / copilot-longrun run，它们会附带 --autopilot --yolo --no-ask-user。
+  - 真正保证无人值守的入口是 longrun / copilot-longrun run（兼容入口），它们会附带 --autopilot --yolo --no-ask-user。
   - `run` 会先预分配新的时间戳 run-id；只有 `resume` 才复用旧 run。
 USAGE
 }
@@ -99,7 +106,7 @@ display_model_slug() {
 
 die() {
   printf 'Error: %s\n' "$*" >&2
-  printf 'Hint: run `copilot-longrun doctor` for a guided environment check.\n' >&2
+  printf 'Hint: run `longrun-doctor` for a guided environment check.\n' >&2
   exit 1
 }
 
@@ -555,7 +562,7 @@ launch_detached_via_screen() {
   local screen_bin session_name screen_rc_file screen_id pid shell_cmd board_file safe_run_ref board_label title model_label
   screen_bin="$(screen_path || true)"
   [ -n "$screen_bin" ] || die "Detached mode requires screen. Install it first or run without --detach."
-  session_name="copilot-longrun-${subcommand}-${ts}"
+  session_name="longrun-${subcommand}-${ts}"
   screen_rc_file="${meta_file%.json}.screenrc"
   printf 'deflog on\nlogfile "%s"\n' "$(screen_quote_for_rc "$log_file")" >"$screen_rc_file"
   shell_cmd='cd "$1" && shift && exec "$@"'
@@ -666,7 +673,8 @@ BANNER
     issues=$((issues + 1))
   fi
   if [ -n "$installed_plugin" ]; then ok "Copilot CLI 已安装插件缓存：$installed_plugin"; else warn "Copilot CLI 未检测到已安装插件缓存"; info "     安装：$(plugin_install_hint)"; fi
-  if [ -x "$HOME/.local/bin/copilot-longrun" ]; then ok "全局 launcher 已安装：$HOME/.local/bin/copilot-longrun"; else warn "全局 launcher 未安装"; info "     安装：bash $REPO_ROOT/scripts/install-global-launcher.sh"; fi
+  if [ -x "$HOME/.local/bin/longrun" ]; then ok "全局 LongRun 命令已安装：$HOME/.local/bin/longrun"; else warn "全局 LongRun 命令未安装"; info "     安装：bash $REPO_ROOT/scripts/install-global-launcher.sh"; fi
+  if [ -x "$HOME/.local/bin/copilot-longrun" ]; then ok "兼容入口已安装：$HOME/.local/bin/copilot-longrun"; fi
   if [ -n "$screen_bin" ]; then ok "Detached PTY backend 已安装：$screen_bin"; else fail "未找到 detached 所需的 screen"; issues=$((issues + 1)); fi
   if [ "$(uname -s)" = "Darwin" ]; then
     if [ -n "$mac_notifier" ]; then
@@ -693,7 +701,7 @@ BANNER
   fi
   printf '\n建议启动方式：\n'
   info '  longrun "<任务描述>"                     # shell 包装器，默认 detached'
-  info '  copilot-longrun run --detach "<任务描述>"'
+  info '  copilot-longrun run --detach "<任务描述>"  # 兼容 / 高级入口'
   info '  longrun-status latest'
   info '  longrun-resume latest'
   printf '\n说明：launcher 默认附带 --autopilot --yolo --no-ask-user，并优先使用当前账号可用的最新 Opus。\n'

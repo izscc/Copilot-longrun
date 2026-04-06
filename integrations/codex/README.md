@@ -8,12 +8,12 @@ LongRun 在 Codex 中的推荐模式是：**Codex 只做入口与回显，GitHub
 bash scripts/install-agent-adapters.sh --agent codex
 bash scripts/install-global-launcher.sh
 bash scripts/install-bare-commands.sh
-copilot-longrun doctor
+longrun-doctor
 ```
 
 ## 你会得到
 
-- Codex skill：`$CODEX_HOME/skills/copilot-longrun-bridge`
+- Codex skill：`$CODEX_HOME/skills/copilot-longrun-bridge`（兼容路径名）
 - Shell wrappers：`longrun` / `longrun-prompt` / `longrun-resume` / `longrun-status`
 - LongRun helper bundle：`~/.copilot-mission-control/bin/`
 

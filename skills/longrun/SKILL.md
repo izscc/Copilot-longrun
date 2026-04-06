@@ -30,7 +30,7 @@ LongRun 采用**轻架构**：
 
 默认不要把“持续观察”伪装成一次普通 session 永久挂起。  
 这类任务应优先：
-1. 用 detached launcher：`longrun "..."` / `copilot-longrun run --detach ...`
+1. 用 detached launcher：`longrun "..."` / `copilot-longrun run --detach ...`（兼容入口）
 2. 把检查点、状态、恢复命令写入 `.copilot-mission-control/`
 3. 在合适时点 resume，而不是依赖当前会话永不结束
 

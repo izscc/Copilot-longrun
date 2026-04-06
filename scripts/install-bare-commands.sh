@@ -184,7 +184,7 @@ LongRun helper bundle:
 Recommended next steps:
   1. bash "$ROOT_DIR/scripts/install-global-launcher.sh"
   2. copilot login
-  3. copilot-longrun doctor
+  3. longrun-doctor
 
 If Copilot CLI is already running, restart the session before testing.
 EOF2

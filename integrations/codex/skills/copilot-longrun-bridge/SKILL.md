@@ -3,7 +3,7 @@ name: copilot-longrun-bridge
 description: Use this skill when the user wants Codex to hand off a task to GitHub Copilot CLI LongRun for unattended execution, prompt generation, status checks, or resuming previous long-running missions. Trigger on requests mentioning longrun, Copilot CLI long tasks, resumable missions, or asking Codex to launch Copilot as the execution backend.
 ---
 
-# Copilot LongRun Bridge
+# LongRun Bridge
 
 这个 skill 让 Codex 成为 LongRun 的轻入口，真正的长跑由本机 GitHub Copilot CLI 执行。
 

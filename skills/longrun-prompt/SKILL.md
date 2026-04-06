@@ -79,12 +79,12 @@ copilot --autopilot --yolo --no-ask-user --model <当前账号可用的最新 Op
 
 若 prompt 中显式指定模型，则启动命令应反映该模型；否则：
 - 若已知本机模型缓存结果，使用“当前账号可用的最新 Opus”
-- 若未知，提示先运行 `longrun-doctor` 或 `copilot-longrun doctor` 探测模型能力
+- 若未知，提示先运行 `longrun-doctor` 探测模型能力；`copilot-longrun doctor` 仅作为兼容入口
 
 ## 6. 注意事项
 
 必要时提醒：
 - raw `/longrun` 若在普通 Copilot session 内手动敲入，会继承当前 session 权限，不保证无确认弹窗
-- `longrun` / `copilot-longrun run` 才是更稳妥的无人值守入口
+- `longrun` / `copilot-longrun run`（兼容入口）才是更稳妥的无人值守入口
 - raw `/longrun` 默认更像“跑到完成就退出”，不是守护进程；若任务要持续监控 / checkpoint / watch，优先建议 launcher + detach
 - autopilot + yolo 有高自治权限，建议在隔离工作区使用

@@ -36,13 +36,13 @@ LongRun 不是“再写一个魔法 prompt”，也不是沉重的平台层。
 ### 只安装 Copilot 插件
 
 ```bash
-copilot plugin install izscc/Copilot-longrun
+copilot plugin install izscc/LongRun
 ```
 
 ### 完整安装（推荐）
 
 ```bash
-git clone https://github.com/izscc/Copilot-longrun.git && cd Copilot-longrun && bash scripts/install-all.sh
+git clone https://github.com/izscc/LongRun.git && cd LongRun && bash scripts/install-all.sh
 ```
 
 完整安装会同时放好：
@@ -89,7 +89,7 @@ longrun-prompt
 longrun-resume       # 默认 detached
 longrun-status
 longrun-doctor
-copilot-longrun      # 底层 launcher
+copilot-longrun      # 兼容 / 高级入口
 ```
 
 最推荐的入口是：
@@ -98,11 +98,11 @@ copilot-longrun      # 底层 launcher
 longrun "<任务描述>"
 ```
 
-`longrun` / `copilot-longrun run` 现在会在启动前：
+`longrun` / `copilot-longrun run`（兼容入口）现在会在启动前：
 - 预分配一个新的时间戳 run-id（形如 `YYYYMMDD-HHMMSS-slug`）
 - 先创建 `.copilot-mission-control/runs/<run-id>/`
 - 写入 `state/active-run-id` 与 `state/latest-run-id`
-- 再把该 run-id 交给 Copilot LongRun skill 继续执行
+- 再把该 run-id 交给 LongRun skill 继续执行
 
 只有显式 `longrun-resume <run-id|latest>` 才会复用旧 run。
 
@@ -232,7 +232,7 @@ LongRun 里要区分两件事：
 ### 5.6 launcher 现在强制“新任务 = 新 run-id”
 
 从现在开始：
-- `longrun "..."` / `copilot-longrun run ...` 会先预分配新 run
+- `longrun "..."` / `copilot-longrun run ...`（兼容入口）会先预分配新 run
 - 新 run 默认不会再复用旧目录
 - 只有 `resume` 才允许继续旧 run
 
@@ -332,7 +332,7 @@ LongRun launcher 与 `/longrun` 共享统一模型策略：
 - 若 deliverable 已存在且本地校验通过，优先直接 finalize COMPLETE，而不是继续浪费额度
 
 ### raw `/longrun` 与 launcher 的区别
-- `longrun "任务"` / `copilot-longrun run ...`  
+- `longrun "任务"` / `copilot-longrun run ...`（兼容入口）  
   会主动选择**当前账号可用的最新 Opus**
 - `copilot --autopilot ... -p "/longrun ..."`  
   如果你没有显式传 `--model`，LongRun 会把状态记录为：
@@ -371,7 +371,7 @@ LongRun launcher 与 `/longrun` 共享统一模型策略：
 先跑：
 
 ```bash
-copilot-longrun doctor
+longrun-doctor
 ```
 
 它会检查：
@@ -388,7 +388,7 @@ copilot-longrun doctor
 如果你刚切换了 Copilot 账号权益，可主动刷新模型缓存：
 
 ```bash
-copilot-longrun doctor --refresh-model-cache
+longrun-doctor --refresh-model-cache
 ```
 
 > 注意：模型探测会发送少量轻量请求；LongRun 会把结果缓存到本地，避免每次长跑都重复探测。
@@ -477,7 +477,7 @@ longrun "<任务描述>"
 或：
 
 ```bash
-copilot-longrun run --detach "<任务描述>"
+copilot-longrun run --detach "<任务描述>"   # 兼容 / 高级入口
 ```
 
 这才是更稳的无人值守入口。
@@ -527,19 +527,19 @@ bash scripts/install-agent-adapters.sh
 ### helper 自测
 
 ```bash
-copilot-longrun selftest
+python3 scripts/selftest_longrun.py
 ```
 
 ### 主动刷新账号模型缓存
 
 ```bash
-copilot-longrun doctor --refresh-model-cache
+longrun-doctor --refresh-model-cache
 ```
 
 ### dry-run 查看实际启动命令
 
 ```bash
-copilot-longrun run --dry-run "帮我调研 2025-2026 全球新能源汽车趋势"
+copilot-longrun run --dry-run "帮我调研 2025-2026 全球新能源汽车趋势"   # 兼容 / 高级入口
 ```
 
 ### 重新安装本机最新版本

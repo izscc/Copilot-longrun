@@ -8,7 +8,7 @@ Claude Code 推荐把 LongRun 当作外部执行后端：**Claude Code 只转发
 bash scripts/install-agent-adapters.sh --agent claude
 bash scripts/install-global-launcher.sh
 bash scripts/install-bare-commands.sh
-copilot-longrun doctor
+longrun-doctor
 ```
 
 ## 已提供命令模板
