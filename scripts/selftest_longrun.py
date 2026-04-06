@@ -166,7 +166,12 @@ def test_finalize_gate_and_force_complete(temp_root: Path) -> None:
     assert status.get("state") == "complete"
     assert status.get("finalizationMode") == "forced"
     assert status.get("verification", {}).get("state") == "failed"
-    assert (run_dir / "COMPLETION.md").exists()
+    completion_file = run_dir / "COMPLETION.md"
+    assert completion_file.exists()
+    completion_text = read_text(completion_file, "")
+    assert "# LongRun 结果摘要" in completion_text
+    assert "## 建议你下一步这样做" in completion_text
+    assert "状态：已完成（COMPLETE）" in completion_text
     assert read_text(state_dir / "active-run-id", "").strip() == ""
 
 

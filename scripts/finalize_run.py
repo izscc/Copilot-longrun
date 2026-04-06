@@ -35,41 +35,78 @@ def coerce_list(values):
     return result
 
 
+def display_status(status_name: str) -> str:
+    mapping = {
+        "complete": "已完成（COMPLETE）",
+        "blocked": "已阻塞（BLOCKED）",
+    }
+    return mapping.get(status_name, status_name.upper())
+
+
+def build_next_steps(status_name: str, delivered: list[str], verification_items: list[str], risks: list[str], recovery: list[str], blockers: list[str], evidence_file: Path | None) -> list[str]:
+    steps: list[str] = []
+    if status_name == "complete":
+        if delivered:
+            steps.append("先打开“交付内容”中的文件，快速确认结果是否符合你的预期。")
+        else:
+            steps.append("本次没有记录到交付内容；如果这不是你的预期，请先回看任务状态和日志。")
+        if not verification_items:
+            steps.append("本次没有记录到显式检查步骤；如果这是重要结果，建议补做一次人工抽查。")
+        if risks:
+            steps.append("处理“仍需注意”里的事项后，再决定是否发布、归档或交给他人继续使用。")
+        else:
+            steps.append("如果结果已经满足预期，可以归档本次任务，或继续发起下一轮任务。")
+    else:
+        steps.append("先处理“当前阻塞”中的问题，再决定下一步。")
+        steps.append("处理完成后，可执行 `longrun-resume latest` 继续。")
+
+    if recovery:
+        steps.append("如需回看这次自动处理过什么，可查看“恢复与处理记录”。")
+    if evidence_file and evidence_file.exists():
+        steps.append("如需追溯参考来源或排查结论依据，请打开 `sources.jsonl`。")
+
+    steps.append("查看当前状态：`longrun-status latest`")
+    return steps
+
+
 def build_completion_markdown(headline: str, status_name: str, delivered: list[str], verification_items: list[str], risks: list[str], recovery: list[str], blockers: list[str], evidence_file: Path | None) -> str:
+    next_steps = build_next_steps(status_name, delivered, verification_items, risks, recovery, blockers, evidence_file)
     lines = [
-        "# LongRun Completion",
+        "# LongRun 结果摘要",
         "",
-        f"Status: {status_name.upper()}",
+        f"状态：{display_status(status_name)}",
         "",
-        "## Outcome",
+        "## 本次结论",
         f"- {headline}",
         "",
-        "## Delivered Artifacts",
+        "## 交付内容",
     ]
     if delivered:
         lines.extend(f"- `{item}`" for item in delivered)
     else:
-        lines.append("- None recorded")
-    lines.extend(["", "## Verification Performed"])
+        lines.append("- 本次没有记录到交付内容。")
+    lines.extend(["", "## 已完成的检查"])
     if verification_items:
         lines.extend(f"- {item}" for item in verification_items)
     else:
-        lines.append("- No explicit verification steps recorded")
-    lines.extend(["", "## Remaining Risks / Follow-ups"])
+        lines.append("- 本次没有记录到显式检查步骤。")
+    lines.extend(["", "## 仍需注意"])
     if risks:
         lines.extend(f"- {item}" for item in risks)
     else:
-        lines.append("- None")
-    lines.extend(["", "## Recovery Decisions"])
+        lines.append("- 当前没有额外风险记录。")
+    lines.extend(["", "## 恢复与处理记录"])
     if recovery:
         lines.extend(f"- {item}" for item in recovery)
     else:
-        lines.append("- None")
+        lines.append("- 本次没有额外恢复记录。")
     if blockers:
-        lines.extend(["", "## Blockers"])
+        lines.extend(["", "## 当前阻塞"])
         lines.extend(f"- {item}" for item in blockers)
+    lines.extend(["", "## 建议你下一步这样做"])
+    lines.extend(f"- {item}" for item in next_steps)
     if evidence_file and evidence_file.exists():
-        lines.extend(["", "## Evidence Trail", f"- `sources.jsonl`: `{evidence_file}`"])
+        lines.extend(["", "## 证据与来源", f"- `sources.jsonl`：`{evidence_file}`"])
     return "\n".join(lines) + "\n"
 
 
@@ -134,13 +171,13 @@ def main() -> int:
 
     verification_items = coerce_list(args.verification_item)
     if args.local_verify:
-        verification_items.append("local verification: " + ("passed" if verification.get("ok") else "failed"))
+        verification_items.append("本地校验：" + ("通过" if verification.get("ok") else "未通过"))
         for finding in verification.get("hardFailures", []):
-            verification_items.append(f"hard failure: {finding}")
+            verification_items.append(f"严重问题：{finding}")
         for finding in verification.get("driftFindings", []):
-            verification_items.append(f"drift finding: {finding}")
+            verification_items.append(f"状态漂移：{finding}")
         for finding in verification.get("softWarnings", []):
-            verification_items.append(f"soft warning: {finding}")
+            verification_items.append(f"风险提示：{finding}")
 
     risks = coerce_list(args.risk)
     recovery = coerce_list(args.recovery_note)
