@@ -32,6 +32,13 @@ COMMAND_SECTION_TITLES = [
 ]
 
 NON_PROMPT_FENCE_LANGS = {"bash", "sh", "shell", "zsh", "json", "yaml", "yml"}
+GUIDE_SECTION_TITLES = [
+    *COMMAND_SECTION_TITLES,
+    "注意事项",
+    "补充说明",
+    "说明",
+    "Notes",
+]
 
 
 def now_suffix() -> str:
@@ -59,41 +66,98 @@ def cleaned_output(text: str) -> str:
     return "\n".join(lines).strip() + "\n"
 
 
-def extract_first_fence(text: str) -> tuple[str | None, str | None]:
-    match = re.search(r"(?ms)^```([^\n`]*)\n(.*?)\n```", text.strip())
-    if not match:
-        return None, None
-    lang = (match.group(1) or "").strip().lower()
-    body = (match.group(2) or "").strip()
-    return lang, body
+def find_heading_after(text: str, start_pos: int, titles: list[str]) -> re.Match[str] | None:
+    if not titles:
+        return None
+    pattern = re.compile(
+        rf"(?m)^[#]{{1,6}}\s*(?:{'|'.join(re.escape(title) for title in titles)})\s*$"
+    )
+    return pattern.search(text, start_pos)
 
 
-def extract_section_fence(text: str, titles: list[str]) -> str | None:
+def extract_named_section(text: str, titles: list[str], next_titles: list[str] | None = None) -> str | None:
     for title in titles:
-        pattern = re.compile(
-            rf"(?ms)^[#]{{1,6}}\s*{re.escape(title)}\s*$.*?^```([^\n`]*)\n(.*?)\n```"
-        )
+        pattern = re.compile(rf"(?m)^[#]{{1,6}}\s*{re.escape(title)}\s*$")
         match = pattern.search(text)
         if match:
-            block = (match.group(2) or "").strip()
+            section_start = match.end()
+            section_end = len(text)
+            next_match = find_heading_after(text, section_start, next_titles or [])
+            if next_match:
+                section_end = next_match.start()
+            block = text[section_start:section_end].strip()
             if block:
                 return block
     return None
 
 
+def strip_outer_fence(block: str) -> tuple[str | None, str | None]:
+    lines = [line.rstrip("\n") for line in block.strip().splitlines()]
+    if not lines:
+        return None, None
+    opener = re.match(r"^\s*([`~]{3,})([^\n]*)\s*$", lines[0])
+    if not opener:
+        return None, None
+    fence = opener.group(1)
+    lang = (opener.group(2) or "").strip().lower()
+    closer_re = re.compile(rf"^\s*{re.escape(fence)}\s*$")
+
+    closing_index = None
+    for index in range(len(lines) - 1, 0, -1):
+        if closer_re.match(lines[index]):
+            closing_index = index
+            break
+
+    if closing_index is None:
+        body_lines = lines[1:]
+    else:
+        body_lines = lines[1:closing_index]
+    body = "\n".join(body_lines).strip()
+    if not body:
+        return lang, None
+    return lang, body
+
+
+def extract_section_fence(text: str, titles: list[str], next_titles: list[str] | None = None) -> str | None:
+    section = extract_named_section(text, titles, next_titles=next_titles)
+    if not section:
+        return None
+    _lang, body = strip_outer_fence(section)
+    if body:
+        return body
+    return None
+
+
 def fallback_prompt_fence(text: str) -> str | None:
-    matches = re.findall(r"(?ms)^```([^\n`]*)\n(.*?)\n```", text.strip())
-    candidates: list[str] = []
-    for lang, body in matches:
-        normalized = (lang or "").strip().lower()
-        if normalized in NON_PROMPT_FENCE_LANGS:
+    lines = text.strip().splitlines()
+    candidates: list[tuple[str, str]] = []
+    idx = 0
+    while idx < len(lines):
+        opener = re.match(r"^\s*([`~]{3,})([^\n]*)\s*$", lines[idx])
+        if not opener:
+            idx += 1
             continue
-        body = body.strip()
+        fence = opener.group(1)
+        lang = (opener.group(2) or "").strip().lower()
+        closer_re = re.compile(rf"^\s*{re.escape(fence)}\s*$")
+        closing_index = None
+        for j in range(len(lines) - 1, idx, -1):
+            if closer_re.match(lines[j]):
+                closing_index = j
+                break
+        if closing_index is None:
+            body = "\n".join(lines[idx + 1:]).strip()
+            idx = len(lines)
+        else:
+            body = "\n".join(lines[idx + 1:closing_index]).strip()
+            idx = closing_index + 1
+        if lang in NON_PROMPT_FENCE_LANGS:
+            continue
         if body:
-            candidates.append(body)
+            candidates.append((lang, body))
     if not candidates:
         return None
-    return max(candidates, key=len)
+    return max(candidates, key=lambda item: len(item[1]))[1]
 
 
 def quoted_cat_command(path: Path) -> str:
@@ -186,7 +250,7 @@ def main() -> int:
     raw = captured_path.read_text(encoding="utf-8")
     cleaned = cleaned_output(raw)
 
-    prompt_body = extract_section_fence(cleaned, PROMPT_SECTION_TITLES)
+    prompt_body = extract_section_fence(cleaned, PROMPT_SECTION_TITLES, next_titles=GUIDE_SECTION_TITLES)
     extracted_mode = "section-fence"
     if not prompt_body:
         prompt_body = fallback_prompt_fence(cleaned)

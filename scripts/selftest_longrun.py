@@ -153,6 +153,86 @@ longrun "修复登录流程"
     assert result["extractMode"] == "section-fence"
 
 
+def test_prompt_output_packager_preserves_nested_fences(temp_root: Path) -> None:
+    workspace = temp_root / "prompt-nested-workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    captured = workspace / "captured.txt"
+    captured.write_text(
+        """## 可直接执行 Prompt
+~~~~markdown
+/longrun 你是 Mission Control。
+
+## 作者署名格式
+```markdown
+> **来源**：知识船仓·公益社区
+```
+
+## 教程大纲要求
+- 这里的正文不能被截断
+~~~~
+
+## 推荐启动命令
+```bash
+longrun "写一份教程"
+```
+""",
+        encoding="utf-8",
+    )
+    packaged = run_cmd(
+        str(SCRIPT_DIR / "prompt_output_packager.py"),
+        "--workspace", str(workspace),
+        "--captured-output", str(captured),
+        "--task", "写一份教程",
+        "--model", "Claude Opus 4.6",
+    )
+    result = json.loads(packaged.stdout)
+    prompt_text = read_text(Path(result["promptFile"]), "")
+    assert "## 作者署名格式" in prompt_text
+    assert "> **来源**：知识船仓·公益社区" in prompt_text
+    assert "## 教程大纲要求" in prompt_text
+    assert "这里的正文不能被截断" in prompt_text
+
+
+def test_prompt_output_packager_recovers_from_legacy_triple_backtick_collision(temp_root: Path) -> None:
+    workspace = temp_root / "prompt-legacy-workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    captured = workspace / "captured.txt"
+    captured.write_text(
+        """## 可直接执行 Prompt
+```markdown
+/longrun 你是 Mission Control。
+
+## 作者署名格式
+```
+> **来源**：知识船仓·公益社区
+```
+
+## 教程大纲要求
+- 这里的正文也不能被截断
+```
+
+## 推荐启动命令
+```bash
+longrun "写一份教程"
+```
+""",
+        encoding="utf-8",
+    )
+    packaged = run_cmd(
+        str(SCRIPT_DIR / "prompt_output_packager.py"),
+        "--workspace", str(workspace),
+        "--captured-output", str(captured),
+        "--task", "写一份教程",
+        "--model", "Claude Opus 4.6",
+    )
+    result = json.loads(packaged.stdout)
+    prompt_text = read_text(Path(result["promptFile"]), "")
+    assert "## 作者署名格式" in prompt_text
+    assert "> **来源**：知识船仓·公益社区" in prompt_text
+    assert "## 教程大纲要求" in prompt_text
+    assert "这里的正文也不能被截断" in prompt_text
+
+
 def test_finalize_gate_and_force_complete(temp_root: Path) -> None:
     workspace, run_dir, state_dir = setup_run(temp_root, "gate-workspace", "20990101-000001-gate")
     reports_dir = workspace / "reports"

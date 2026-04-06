@@ -63,6 +63,7 @@ disable-model-invocation: false
 另外必须满足下面的格式约束，便于 launcher 自动整理成本地文件：
 
 - `## 可直接执行 Prompt` 下面必须紧跟一个 fenced code block
+- 这个外层 fenced code block **必须优先使用 `~~~~markdown`**（四个波浪线），不要用三反引号；因为 Prompt 正文里可能还会嵌套代码块
 - 这个 code block 里只放 **Prompt 正文**，不要把分析摘要、注意事项、命令说明混进去
 - `## 推荐启动命令` 下面必须紧跟一个 fenced `bash` code block
 - 如果还要输出其他补充说明，放在这两个区块之外
