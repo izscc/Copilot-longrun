@@ -33,13 +33,29 @@ LongRun 不是“再写一个魔法 prompt”，也不是沉重的平台层。
 
 ## 一句话安装
 
-### 只安装 Copilot 插件
+### 只安装 Copilot 插件（仅插件缓存）
 
 ```bash
 copilot plugin install izscc/LongRun
 ```
 
-### 完整安装（推荐）
+这一步主要是把 LongRun 插件内容放进 Copilot CLI 的插件缓存里。  
+**它不会自动执行本机安装脚本**，因此默认还不会完整装好：
+
+- `longrun` / `longrun-doctor` 等全局命令
+- LongRun helper bundle
+- Codex / Claude Code 适配
+- macOS 增强通知链路
+
+如果你想直接在这台 Mac 上把 LongRun 全套能力一次装好，请用下面这条。
+
+### 一键完整安装（推荐）
+
+```bash
+copilot plugin install izscc/LongRun && bash "$HOME/.copilot/installed-plugins/_direct/izscc--LongRun/scripts/install-all.sh" && longrun-doctor --notify-test
+```
+
+### 从源码完整安装（适合长期维护）
 
 ```bash
 git clone https://github.com/izscc/LongRun.git && cd LongRun && bash scripts/install-all.sh
@@ -51,6 +67,28 @@ git clone https://github.com/izscc/LongRun.git && cd LongRun && bash scripts/ins
 - LongRun helper bundle
 - shell launchers
 - Codex / Claude Code adapters
+
+### 后续更新（推荐先卸载旧版本，再完整安装新版）
+
+如果你是通过 Copilot CLI 直接安装的，推荐使用下面这组命令进行干净更新：
+
+```bash
+bash "$HOME/.copilot/installed-plugins/_direct/izscc--LongRun/scripts/uninstall-all.sh" || true
+copilot plugin uninstall copilot-mission-control || true
+copilot plugin install izscc/LongRun
+bash "$HOME/.copilot/installed-plugins/_direct/izscc--LongRun/scripts/install-all.sh"
+longrun-doctor --notify-test
+```
+
+如果你是通过本地源码仓库维护 LongRun，则推荐：
+
+```bash
+cd /path/to/LongRun
+bash scripts/uninstall-all.sh
+git pull --ff-only
+bash scripts/install-all.sh
+longrun-doctor --notify-test
+```
 
 ---
 

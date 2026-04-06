@@ -10,3 +10,4 @@ printf '\n---\n\n'
 bash "$ROOT_DIR/scripts/install-agent-adapters.sh" "$@"
 printf '\n---\n\n'
 "$ROOT_DIR/scripts/longrun-doctor" || true
+printf '\nTip: run `longrun-doctor --notify-test` to verify macOS notifications.\n'

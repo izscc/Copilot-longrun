@@ -44,14 +44,14 @@ Usage:
   longrun-prompt "<task>"
   longrun-resume [run-id|latest]
   longrun-status [run-id|latest]
-  longrun-doctor [--refresh-model-cache]
+  longrun-doctor [--refresh-model-cache] [--notify-test]
 
 Advanced / compatibility:
   copilot-longrun run [--detach] [--max-continues N] [--model MODEL] [--refresh-model-cache] [--dry-run] <task>
   copilot-longrun prompt [--model MODEL] [--refresh-model-cache] [--dry-run] <task>
   copilot-longrun resume [--detach] [--max-continues N] [--model MODEL] [--refresh-model-cache] [--dry-run] [run-id|latest]
   copilot-longrun status [--model MODEL] [--refresh-model-cache] [--dry-run] [run-id|latest]
-  copilot-longrun doctor [--refresh-model-cache]
+  copilot-longrun doctor [--refresh-model-cache] [--notify-test]
   copilot-longrun selftest
   copilot-longrun help
 
@@ -59,6 +59,7 @@ Notes:
   - 默认模型策略：优先使用当前账号可用的最新 Opus；若无 Opus，再走 Sonnet / GPT-5.4 / Gemini fallback
   - 如果任务文本里显式写了模型（如 Opus / Sonnet / GPT-5.4），launcher 会优先匹配该模型。
   - 可用 --refresh-model-cache 强制刷新账号模型可用性缓存。
+  - 可用 --notify-test 主动发送一条 macOS 测试通知，确认提醒链路是否正常。
   - 真正保证无人值守的入口是 longrun / copilot-longrun run（兼容入口），它们会附带 --autopilot --yolo --no-ask-user。
   - `run` 会先预分配新的时间戳 run-id；只有 `resume` 才复用旧 run。
 USAGE
@@ -619,6 +620,7 @@ preflight_or_die() {
 
 doctor() {
   local refresh_cache="${1:-0}"
+  local notify_test="${2:-0}"
   local issues=0
   local copilot_bin="$(copilot_path || true)"
   local gh_bin="$(gh_path || true)"
@@ -699,11 +701,39 @@ BANNER
       issues=$((issues + 1))
     fi
   fi
+  if [ "$notify_test" -eq 1 ]; then
+    printf '\n通知自检：\n'
+    if [ "$(uname -s)" != "Darwin" ]; then
+      warn "当前系统不是 macOS，跳过通知测试"
+    elif [ -z "$helper_notify" ]; then
+      fail "未找到通知 helper notify_macos.py"
+      issues=$((issues + 1))
+    else
+      if python3 "$helper_notify" \
+        --workspace "$PWD" \
+        --event attention \
+        --title "LongRun 通知测试" \
+        --subtitle "这是一次提醒链路自检" \
+        --message "如果你没有看到这条提醒，请检查系统通知权限、专注模式和通知摘要。" \
+        --open "$PWD" \
+        --sound \
+        --dedupe-seconds 0 \
+        --group "longrun.doctor-test.$(date +%s)" >/dev/null 2>&1; then
+        ok "测试通知已发送"
+        info "     若 3 秒内没有看到横幅，请检查：系统设置 > 通知 > terminal-notifier（或 Script Editor）"
+        info "     另外请确认未开启专注模式，且没有被归入通知摘要。"
+      else
+        fail "测试通知发送失败"
+        issues=$((issues + 1))
+      fi
+    fi
+  fi
   printf '\n建议启动方式：\n'
   info '  longrun "<任务描述>"                     # shell 包装器，默认 detached'
   info '  copilot-longrun run --detach "<任务描述>"  # 兼容 / 高级入口'
   info '  longrun-status latest'
   info '  longrun-resume latest'
+  info '  longrun-doctor --notify-test'
   printf '\n说明：launcher 默认附带 --autopilot --yolo --no-ask-user，并优先使用当前账号可用的最新 Opus。\n'
   printf '如果你在一个已打开的普通 Copilot session 里直接手敲 /longrun，它会继承当前 session 权限，不保证无 URL/tool/path 确认弹窗。\n'
   [ "$issues" -eq 0 ]
@@ -715,15 +745,17 @@ case "$subcmd" in
   help|-h|--help) usage; exit 0 ;;
   doctor)
     refresh_model_cache=0
+    notify_test=0
     while [ "$#" -gt 0 ]; do
       case "$1" in
         --refresh-model-cache) refresh_model_cache=1; shift ;;
+        --notify-test) notify_test=1; shift ;;
         --) shift; break ;;
         -*) die "unknown option: $1" ;;
         *) break ;;
       esac
     done
-    doctor "$refresh_model_cache"
+    doctor "$refresh_model_cache" "$notify_test"
     exit $?
     ;;
   selftest)
