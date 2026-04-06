@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -38,6 +39,47 @@ def setup_run(temp_root: Path, name: str, run_id: str) -> tuple[Path, Path, Path
     (state_dir / "active-run-id").write_text(run_id, encoding="utf-8")
     (state_dir / "latest-run-id").write_text(run_id, encoding="utf-8")
     return workspace, run_dir, state_dir
+
+
+def test_prepare_run_allocates_fresh_timestamped_runs(temp_root: Path) -> None:
+    workspace = temp_root / "prepare-workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    first = run_cmd(
+        str(SCRIPT_DIR / "prepare_run.py"),
+        "--workspace", str(workspace),
+        "--task", "发布 iCopilot v1 并上传 release artifact",
+        "--session-model", "claude-opus-4.6",
+        "--model-control-mode", "launcher-enforced",
+        "--launcher-mode", "launcher-preallocated",
+        "--print-json",
+    )
+    first_result = json.loads(first.stdout)
+    first_run_id = first_result["runId"]
+    assert re.match(r"^\d{8}-\d{6}-[a-z0-9-]+$", first_run_id)
+    assert (workspace / ".copilot-mission-control" / "runs" / first_run_id / "mission.md").exists()
+
+    second = run_cmd(
+        str(SCRIPT_DIR / "prepare_run.py"),
+        "--workspace", str(workspace),
+        "--task", "发布 iCopilot v1 并上传 release artifact",
+        "--session-model", "claude-opus-4.6",
+        "--model-control-mode", "launcher-enforced",
+        "--launcher-mode", "launcher-preallocated",
+        "--print-json",
+    )
+    second_result = json.loads(second.stdout)
+    second_run_id = second_result["runId"]
+    assert second_run_id != first_run_id
+
+    state_dir = workspace / ".copilot-mission-control" / "state"
+    assert read_text(state_dir / "active-run-id", "").strip() == second_run_id
+    assert read_text(state_dir / "latest-run-id", "").strip() == second_run_id
+
+    second_status = read_json(workspace / ".copilot-mission-control" / "runs" / second_run_id / "status.json", {})
+    assert second_status.get("launcherMode") == "launcher-preallocated"
+    assert second_status.get("modelControlMode") == "launcher-enforced"
+    assert second_status.get("selectedModel") == "claude-opus-4.6"
 
 
 def test_finalize_gate_and_force_complete(temp_root: Path) -> None:
@@ -97,6 +139,74 @@ def test_finalize_gate_and_force_complete(temp_root: Path) -> None:
     assert status.get("finalizationMode") == "forced"
     assert status.get("verification", {}).get("state") == "failed"
     assert (run_dir / "COMPLETION.md").exists()
+    assert read_text(state_dir / "active-run-id", "").strip() == ""
+
+
+def test_complete_requires_deliverables_and_task_list(temp_root: Path) -> None:
+    workspace, run_dir, state_dir = setup_run(temp_root, "tasklist-workspace", "20990101-000003-tasklist")
+    (workspace / "reports").mkdir(parents=True, exist_ok=True)
+    (workspace / "task-list.md").write_text(
+        "# Task List\n\n- [x] Explore\n- [ ] Final verification\n",
+        encoding="utf-8",
+    )
+
+    payload = {
+        "runId": run_dir.name,
+        "state": "running",
+        "phase": "verify",
+        "profile": "coding",
+        "language": "zh-CN",
+        "summary": "task list gate",
+        "deliverables": [],
+        "completedWorkstreams": ["explore", "plan", "execute"],
+        "activeWorkstreams": [],
+        "selectedModel": "session-inherited",
+        "modelControlMode": "session-inherited",
+        "fallbackChain": [],
+        "recoveryState": {"phaseAttempts": {}},
+    }
+    run_cmd(str(SCRIPT_DIR / "write_status.py"), "--workspace", str(workspace), "--run-id", run_dir.name, "--replace-json", json.dumps(payload, ensure_ascii=False))
+
+    failed = run_cmd(
+        str(SCRIPT_DIR / "finalize_run.py"),
+        "--workspace", str(workspace),
+        "--run-id", run_dir.name,
+        "--status", "complete",
+        "--headline", "should fail on empty deliverables and unchecked task list",
+        "--local-verify",
+        ok=False,
+    )
+    assert failed.returncode != 0
+    status = read_json(run_dir / "status.json", {})
+    findings = status.get("verification", {}).get("driftFindings", []) + status.get("verification", {}).get("hardFailures", [])
+    assert any("deliverables is empty" in item for item in findings)
+    assert any("task-list.md has unchecked required items" in item for item in findings)
+    assert read_text(state_dir / "active-run-id", "").strip() == run_dir.name
+
+    (workspace / "task-list.md").write_text(
+        "# Task List\n\n- [x] Explore\n- [x] Final verification\n",
+        encoding="utf-8",
+    )
+    (workspace / "reports" / "done.md").write_text("# done\n", encoding="utf-8")
+    run_cmd(
+        str(SCRIPT_DIR / "write_status.py"),
+        "--workspace", str(workspace),
+        "--run-id", run_dir.name,
+        "--patch-json",
+        json.dumps({"deliverables": ["reports/done.md"]}, ensure_ascii=False),
+    )
+    succeeded = run_cmd(
+        str(SCRIPT_DIR / "finalize_run.py"),
+        "--workspace", str(workspace),
+        "--run-id", run_dir.name,
+        "--status", "complete",
+        "--headline", "task list and deliverables satisfied",
+        "--local-verify",
+    )
+    assert succeeded.returncode == 0
+    status = read_json(run_dir / "status.json", {})
+    assert status.get("state") == "complete"
+    assert status.get("deliverables") == ["reports/done.md"]
     assert read_text(state_dir / "active-run-id", "").strip() == ""
 
 
@@ -203,7 +313,9 @@ def test_historical_run_regression(temp_root: Path) -> None:
 def main() -> int:
     temp_root = Path(tempfile.mkdtemp(prefix="longrun-selftest-"))
     try:
+        test_prepare_run_allocates_fresh_timestamped_runs(temp_root)
         test_finalize_gate_and_force_complete(temp_root)
+        test_complete_requires_deliverables_and_task_list(temp_root)
         test_reconcile_harvest_and_naming(temp_root)
         test_historical_run_regression(temp_root)
         print("selftest: ok")

@@ -191,6 +191,29 @@ def active_run_file(base: Path) -> Path:
     return base / "state" / "active-run-id"
 
 
+def latest_run_file(base: Path) -> Path:
+    return base / "state" / "latest-run-id"
+
+
+def set_active_run(base: Path, run_id: str) -> Path:
+    return write_text_atomic(active_run_file(base), sanitize_run_id(run_id))
+
+
+def set_latest_run(base: Path, run_id: str) -> Path:
+    return write_text_atomic(latest_run_file(base), sanitize_run_id(run_id))
+
+
+def prompt_stem(prompt: str | None) -> str:
+    text = (prompt or "").strip()
+    if not text:
+        return "mission"
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    stem = lines[0] if lines else text
+    stem = re.sub(r"^/(?:copilot-mission-control:)?longrun(?:-[a-z0-9-]+)?\b", "", stem, flags=re.I).strip()
+    stem = re.sub(r"^#+\s*", "", stem)
+    return stem or "mission"
+
+
 def default_model_config() -> dict[str, Any]:
     return {
         "defaultPolicy": "latest-available-opus-first",
@@ -389,6 +412,23 @@ def slugify(text: str, max_len: int = 48) -> str:
     lowered = re.sub(r"[^a-zA-Z0-9]+", "-", text.lower()).strip("-")
     lowered = re.sub(r"-+", "-", lowered)
     return (lowered[:max_len] or "mission").strip("-")
+
+
+def mint_run_id(workspace: str | Path | None, prompt: str | None, *, max_slug_len: int = 24) -> str:
+    ws = resolve_workspace(str(workspace) if workspace else None)
+    runs_dir = ws / ".copilot-mission-control" / "runs"
+    ensure_dir(runs_dir)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    base_slug = slugify(prompt_stem(prompt), max_len=max_slug_len) or "mission"
+    candidate = f"{stamp}-{base_slug}"
+    counter = 2
+    while (runs_dir / candidate).exists():
+        suffix = f"-{counter:02d}"
+        slug_len = max(8, max_slug_len - len(suffix))
+        slug = slugify(base_slug, max_len=slug_len) or "mission"
+        candidate = f"{stamp}-{slug}{suffix}"
+        counter += 1
+    return candidate
 
 
 def infer_profile(prompt: str) -> str:
@@ -723,7 +763,7 @@ def sync_plan_markdown(target: RunTarget, status: dict[str, Any] | None = None) 
     return write_text_atomic(plan_file, updated.strip() + "\n")
 
 
-def plan_sync_findings(target: RunTarget, status: dict[str, Any] | None = None) -> list[str]:
+def plan_sync_findings(target: RunTarget, status: dict[str, Any] | None = None, *, finalize_candidate: bool = False) -> list[str]:
     status_obj = refresh_artifact_inventory(target, status or read_json(status_path(target), {}))
     findings: list[str] = []
     plan_text = read_text(target.run_dir / "plan.md", "")
@@ -745,15 +785,76 @@ def plan_sync_findings(target: RunTarget, status: dict[str, Any] | None = None) 
     if status_obj.get("state") in {"complete", "blocked"}:
         if list(status_obj.get("activeWorkstreams") or []):
             findings.append("status is finalized but activeWorkstreams is not empty")
-        if not list(status_obj.get("deliverables") or []):
+        if status_obj.get("state") == "complete" and not list(status_obj.get("deliverables") or []):
             findings.append("status is finalized but deliverables is empty")
         active = active_run_file(target.base)
-        if active.exists() and read_text(active, "").strip() == target.run_id:
+        if not finalize_candidate and active.exists() and read_text(active, "").strip() == target.run_id:
             findings.append("state/active-run-id still points to finalized run")
     return findings
 
 
-def local_verify(target: RunTarget, status_override: dict[str, Any] | None = None) -> dict[str, Any]:
+TASK_LIST_ADVISORY_MARKERS = {
+    "<!-- LONGRUN:TASK-LIST:ADVISORY -->",
+    "<!-- LONGRUN:TASK-LIST:UNMANAGED -->",
+}
+
+TASK_LIST_ADVISORY_HEADINGS = {
+    "backlog",
+    "later",
+    "optional",
+    "deferred",
+    "future",
+    "icebox",
+    "someday",
+    "follow-up",
+    "follow up",
+    "后续",
+    "可选",
+    "暂缓",
+    "以后",
+    "待办池",
+}
+
+
+def task_list_findings(target: RunTarget) -> list[str]:
+    findings: list[str] = []
+    candidates = [
+        target.run_dir / "task-list.md",
+        target.workspace / "task-list.md",
+    ]
+    seen_paths: set[Path] = set()
+    for task_file in candidates:
+        if task_file in seen_paths or not task_file.exists() or not task_file.is_file():
+            continue
+        seen_paths.add(task_file)
+        text = read_text(task_file, "")
+        if not text.strip():
+            continue
+        if any(marker in text for marker in TASK_LIST_ADVISORY_MARKERS):
+            continue
+
+        advisory_section = False
+        unchecked: list[str] = []
+        for raw_line in text.splitlines():
+            heading = re.match(r"^\s{0,3}#{1,6}\s+(.+?)\s*$", raw_line)
+            if heading:
+                normalized = heading.group(1).strip().lower()
+                advisory_section = any(keyword in normalized for keyword in TASK_LIST_ADVISORY_HEADINGS)
+                continue
+            item = re.match(r"^\s*[-*]\s+\[ \]\s+(.+?)\s*$", raw_line)
+            if item and not advisory_section:
+                unchecked.append(item.group(1).strip())
+
+        if unchecked:
+            preview = ", ".join(unchecked[:3])
+            suffix = f" (+{len(unchecked) - 3} more)" if len(unchecked) > 3 else ""
+            findings.append(
+                f"{task_file.name} has unchecked required items: {preview}{suffix}"
+            )
+    return findings
+
+
+def local_verify(target: RunTarget, status_override: dict[str, Any] | None = None, *, finalize_candidate: bool = False) -> dict[str, Any]:
     status = refresh_artifact_inventory(target, status_override or read_json(status_path(target), {}))
     deliverables = status.get("deliverables") or []
     deliverables = [deliverables] if isinstance(deliverables, str) else deliverables
@@ -784,10 +885,12 @@ def local_verify(target: RunTarget, status_override: dict[str, Any] | None = Non
             soft_warnings.append("sources.jsonl has no recorded entries")
         if artifact_count < 1:
             hard_failures.append("artifacts directory has no markdown workstream outputs")
-    drift_findings.extend(plan_sync_findings(target, status))
+    drift_findings.extend(plan_sync_findings(target, status, finalize_candidate=finalize_candidate))
+    if status.get("state") == "complete":
+        drift_findings.extend(task_list_findings(target))
     completion = completion_path(target)
     legacy_completion = legacy_completion_path(target)
-    if status.get("state") in {"complete", "blocked"} and not completion.exists() and not legacy_completion.exists():
+    if status.get("state") in {"complete", "blocked"} and not finalize_candidate and not completion.exists() and not legacy_completion.exists():
         hard_failures.append("COMPLETION.md is missing for finalized run")
     elif status.get("state") in {"complete", "blocked"} and legacy_completion.exists() and not completion.exists():
         soft_warnings.append("legacy final-summary.md exists without COMPLETION.md")
@@ -814,6 +917,19 @@ def clear_active_run_if_matches(target: RunTarget) -> None:
     active = active_run_file(target.base)
     if active.exists() and read_text(active, "").strip() == target.run_id:
         active.unlink()
+
+
+def ensure_run_layout(target: RunTarget) -> None:
+    ensure_dir(target.run_dir)
+    ensure_dir(target.run_dir / "artifacts")
+    for path in (
+        target.run_dir / "mission.md",
+        target.run_dir / "plan.md",
+        journal_path(target),
+        sources_path(target),
+    ):
+        ensure_dir(path.parent)
+        path.touch(exist_ok=True)
 
 
 def stable_source_id(url: str, title: str = "") -> str:

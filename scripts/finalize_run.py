@@ -94,10 +94,13 @@ def main() -> int:
 
     delivered = coerce_list(args.delivered_artifact) or list(current.get("deliverables") or [])
     provisional = dict(current)
+    provisional["state"] = args.status
+    provisional["phase"] = "finalize"
+    provisional["summary"] = args.headline
     provisional["deliverables"] = delivered
     provisional = refresh_artifact_inventory(target, provisional)
 
-    verification = local_verify(target, status_override=provisional) if args.local_verify else {
+    verification = local_verify(target, status_override=provisional, finalize_candidate=True) if args.local_verify else {
         "ok": True,
         "deliverables": [],
         "hardFailures": [],

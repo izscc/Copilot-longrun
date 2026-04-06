@@ -86,10 +86,16 @@ def detect_fallback_reason(output: str) -> str | None:
     return None
 
 
-def patch_latest_run(workspace: Path, *, selected_model: str, fallback_reason: str | None = None, note: str | None = None) -> None:
+def resolve_managed_target(workspace: Path, run_ref: str | None = None):
     try:
-        target = resolve_run_target(workspace, "latest")
+        return resolve_run_target(workspace, run_ref or "latest")
     except LongRunError:
+        return None
+
+
+def patch_latest_run(workspace: Path, *, run_ref: str | None = None, selected_model: str, fallback_reason: str | None = None, note: str | None = None) -> None:
+    target = resolve_managed_target(workspace, run_ref)
+    if target is None:
         return
     status_file = status_path(target)
     status = ensure_status_defaults(read_json(status_file, {}))
@@ -110,10 +116,9 @@ def patch_latest_run(workspace: Path, *, selected_model: str, fallback_reason: s
     write_json_atomic(status_file, status)
 
 
-def patch_recovery_hint(workspace: Path, *, message: str, failure_class: str | None = None, recommended_action: str | None = None) -> None:
-    try:
-        target = resolve_run_target(workspace, "latest")
-    except LongRunError:
+def patch_recovery_hint(workspace: Path, *, run_ref: str | None = None, message: str, failure_class: str | None = None, recommended_action: str | None = None) -> None:
+    target = resolve_managed_target(workspace, run_ref)
+    if target is None:
         return
     status_file = status_path(target)
     status = ensure_status_defaults(read_json(status_file, {}))
@@ -129,10 +134,9 @@ def patch_recovery_hint(workspace: Path, *, message: str, failure_class: str | N
     write_json_atomic(status_file, status)
 
 
-def auto_finalize_if_possible(workspace: Path, note: str) -> bool:
-    try:
-        target = resolve_run_target(workspace, "latest")
-    except LongRunError:
+def auto_finalize_if_possible(workspace: Path, note: str, run_ref: str | None = None) -> bool:
+    target = resolve_managed_target(workspace, run_ref)
+    if target is None:
         return False
     subprocess.run([
         sys.executable,
@@ -153,6 +157,7 @@ def auto_finalize_if_possible(workspace: Path, note: str) -> bool:
     if not verification.get("ok") or not verification.get("deliverables"):
         patch_recovery_hint(
             workspace,
+            run_ref=target.run_id,
             message="auto-finalize precheck did not pass local verification",
             failure_class=verification.get("failureClass"),
             recommended_action=verification.get("recommendedAction"),
@@ -172,10 +177,9 @@ def auto_finalize_if_possible(workspace: Path, note: str) -> bool:
     return True
 
 
-def maybe_finalize_blocked(workspace: Path, note: str) -> None:
-    try:
-        target = resolve_run_target(workspace, "latest")
-    except LongRunError:
+def maybe_finalize_blocked(workspace: Path, note: str, run_ref: str | None = None) -> None:
+    target = resolve_managed_target(workspace, run_ref)
+    if target is None:
         return
     status = read_json(status_path(target), {})
     if status.get("state") in {"complete", "blocked"}:
@@ -205,6 +209,7 @@ def main() -> int:
     parser.add_argument("--explicit-model")
     parser.add_argument("--model-config")
     parser.add_argument("--availability-cache")
+    parser.add_argument("--target-run-id", default="")
     parser.add_argument("--refresh-model-cache", action="store_true")
     parser.add_argument("--plugin-arg", action="append", default=[])
     args = parser.parse_args()
@@ -225,31 +230,52 @@ def main() -> int:
     chain = model_chain(config, explicit_model=args.explicit_model, prompt_text=args.payload, availability=availability)
     current_skill = args.skill_ref
     current_payload = args.payload
+    managed_target = resolve_managed_target(workspace, args.target_run_id or "latest")
+    managed_run_ref = managed_target.run_id if managed_target else (args.target_run_id or "latest")
+    if args.mode == "run" and managed_target is not None:
+        current_payload = (
+            "[LongRun launcher context]\n"
+            f"Assigned run-id: {managed_target.run_id}\n"
+            "Use this exact run-id for this invocation; do not mint a different run-id.\n"
+            "[/LongRun launcher context]\n\n"
+            f"{args.payload}"
+        ).strip()
+    elif args.mode == "resume" and managed_target is not None:
+        current_payload = (
+            "[LongRun launcher context]\n"
+            f"Resume existing run-id: {managed_target.run_id}\n"
+            "Continue this run and do not create a new run-id.\n"
+            "[/LongRun launcher context]\n\n"
+            f"{args.payload}"
+        ).strip()
 
     for index, model in enumerate(chain):
         human = display_model_name(model, config)
         print(f"[LongRun] attempt {index + 1}/{len(chain)} with model: {human} ({model})")
-        patch_latest_run(workspace, selected_model=model, note="launcher-attempt")
+        patch_latest_run(workspace, run_ref=managed_run_ref, selected_model=model, note="launcher-attempt")
         cmd = build_command(args, current_skill, current_payload, model)
         rc, output = run_and_stream(cmd, workspace, {
             "LONGRUN_SELECTED_MODEL": model,
             "LONGRUN_MODEL_CONTROL_MODE": "launcher-enforced",
+            "LONGRUN_RUN_ID": managed_target.run_id if managed_target else "",
+            "LONGRUN_RUN_DIR": str(managed_target.run_dir) if managed_target else "",
+            "LONGRUN_LAUNCH_MODE": "launcher-resume" if args.mode == "resume" else "launcher-preallocated" if args.mode == "run" else args.mode,
         })
         fallback_reason = detect_fallback_reason(output)
         if rc == 0 and not fallback_reason:
             return 0
-        if auto_finalize_if_possible(workspace, f"launcher observed: {fallback_reason or 'non-zero exit after deliverable verification'}"):
+        if auto_finalize_if_possible(workspace, f"launcher observed: {fallback_reason or 'non-zero exit after deliverable verification'}", run_ref=managed_run_ref):
             return 0
         if not fallback_reason:
             failure_class, recommended = classify_failure(last_error=output)
-            patch_recovery_hint(workspace, message="launcher run failed without model fallback", failure_class=failure_class, recommended_action=recommended)
+            patch_recovery_hint(workspace, run_ref=managed_run_ref, message="launcher run failed without model fallback", failure_class=failure_class, recommended_action=recommended)
             return rc or 1
         _, recommended = classify_failure(last_error=fallback_reason)
-        patch_recovery_hint(workspace, message=fallback_reason, failure_class=fallback_reason.replace("-", "_"), recommended_action=recommended)
-        patch_latest_run(workspace, selected_model=model, fallback_reason=fallback_reason)
+        patch_recovery_hint(workspace, run_ref=managed_run_ref, message=fallback_reason, failure_class=fallback_reason.replace("-", "_"), recommended_action=recommended)
+        patch_latest_run(workspace, run_ref=managed_run_ref, selected_model=model, fallback_reason=fallback_reason)
         if args.mode in {"run", "resume"} and args.resume_skill_ref:
             current_skill = args.resume_skill_ref
-            current_payload = "latest"
+            current_payload = managed_target.run_id if managed_target else "latest"
         if index + 1 < len(chain):
             continue
 
@@ -262,18 +288,21 @@ def main() -> int:
             rc, output = run_and_stream(retry_cmd, workspace, {
                 "LONGRUN_SELECTED_MODEL": model,
                 "LONGRUN_MODEL_CONTROL_MODE": "launcher-enforced",
+                "LONGRUN_RUN_ID": managed_target.run_id if managed_target else "",
+                "LONGRUN_RUN_DIR": str(managed_target.run_dir) if managed_target else "",
+                "LONGRUN_LAUNCH_MODE": "launcher-resume" if args.mode == "resume" else "launcher-preallocated" if args.mode == "run" else args.mode,
             })
             retry_reason = detect_fallback_reason(output)
             if rc == 0 and not retry_reason:
                 return 0
-            if auto_finalize_if_possible(workspace, f"launcher recovered after {note}"):
+            if auto_finalize_if_possible(workspace, f"launcher recovered after {note}", run_ref=managed_run_ref):
                 return 0
             _, recommended = classify_failure(last_error=retry_reason or fallback_reason)
-            patch_recovery_hint(workspace, message=retry_reason or fallback_reason, failure_class=(retry_reason or fallback_reason or "").replace("-", "_") or None, recommended_action=recommended)
-            patch_latest_run(workspace, selected_model=model, fallback_reason=retry_reason or fallback_reason)
+            patch_recovery_hint(workspace, run_ref=managed_run_ref, message=retry_reason or fallback_reason, failure_class=(retry_reason or fallback_reason or "").replace("-", "_") or None, recommended_action=recommended)
+            patch_latest_run(workspace, run_ref=managed_run_ref, selected_model=model, fallback_reason=retry_reason or fallback_reason)
             if not retry_reason:
                 return rc or 1
-        maybe_finalize_blocked(workspace, f"{fallback_reason}; exhausted fallback chain and backoff budget")
+        maybe_finalize_blocked(workspace, f"{fallback_reason}; exhausted fallback chain and backoff budget", run_ref=managed_run_ref)
         return 1
 
     return 1

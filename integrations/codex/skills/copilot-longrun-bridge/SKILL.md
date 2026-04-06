@@ -35,9 +35,11 @@ LongRun launcher 默认：
 - 使用 `--autopilot --yolo --no-ask-user`
 - 采用 **Opus-first** 模型策略
 - 在 rate limit / model unavailable 时自动 fallback 或 backoff
+- 默认语义是“跑到 mission 完成后退出”，不是常驻守护
 
 ## 响应策略
 
 - 不要在 Codex 内部重复实现 LongRun 的任务逻辑
 - 成功 launch 后，不要在 Codex 本地再跑同一任务
 - 若用户要 web-heavy research，可提醒 launcher 已尽量避免 URL 确认，但 raw `/longrun` in-session 方式仍可能继承普通权限模型
+- 若用户明确说“不要自己结束 / 持续监控 / 长时间挂着”，优先推荐 detached launcher，而不是 raw `/longrun`

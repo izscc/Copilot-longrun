@@ -53,6 +53,7 @@ Notes:
   - 如果任务文本里显式写了模型（如 Opus / Sonnet / GPT-5.4），launcher 会优先匹配该模型。
   - 可用 --refresh-model-cache 强制刷新账号模型可用性缓存。
   - 真正保证无人值守的入口是 longrun / copilot-longrun run，它们会附带 --autopilot --yolo --no-ask-user。
+  - `run` 会先预分配新的时间戳 run-id；只有 `resume` 才复用旧 run。
 USAGE
 }
 
@@ -251,6 +252,15 @@ shell_join() {
   python3 - "$@" <<'PY'
 import shlex, sys
 print(shlex.join(sys.argv[1:]))
+PY
+}
+
+normalize_run_payload() {
+  python3 - "$1" <<'PY'
+import re, sys
+text = sys.argv[1]
+normalized = re.sub(r'^\s*/(?:copilot-mission-control:)?longrun(?:-[a-z0-9-]+)?\b[^\S\r\n]*', '', text, count=1, flags=re.I)
+print((normalized if normalized.strip() else text).strip())
 PY
 }
 
@@ -557,6 +567,24 @@ selected_model="$(selected_model_for_payload "$payload_text" "$model" || true)"
 [ -n "$selected_model" ] || selected_model="$model"
 [ -n "$selected_model" ] || selected_model="claude-opus-4.5"
 
+prepared_run_id=""
+if [ "$subcmd" = "run" ]; then
+  normalized_payload="$(normalize_run_payload "$payload_text")"
+  if [ "$normalized_payload" != "$payload_text" ]; then
+    warn "检测到任务文本自带 /longrun 前缀；launcher 已自动剥离，避免双重触发。"
+    payload_text="$normalized_payload"
+  fi
+  PREPARE_RUN="$(helper_path prepare_run.py || true)"
+  [ -n "$PREPARE_RUN" ] || die "prepare_run helper missing. Run bash $REPO_ROOT/scripts/install-bare-commands.sh"
+  if [ "$dry_run" -eq 0 ]; then
+    prepare_cmd=(python3 "$PREPARE_RUN" --workspace "$PWD" --task "$payload_text" --launcher-mode launcher-preallocated --session-model "$selected_model" --model-control-mode launcher-enforced --print-json)
+    [ -n "$model" ] && prepare_cmd+=(--explicit-model "$model")
+    prepared_json="$("${prepare_cmd[@]}")" || die "failed to prepare fresh LongRun run"
+    prepared_run_id="$(printf '%s' "$prepared_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["runId"])')"
+    info "Prepared LongRun run-id: $prepared_run_id"
+  fi
+fi
+
 SUPERVISOR="$(helper_path launch_supervisor.py || true)"
 [ -n "$SUPERVISOR" ] || die "launch supervisor helper missing. Run bash $REPO_ROOT/scripts/install-bare-commands.sh"
 
@@ -565,6 +593,8 @@ supervisor_cmd=(python3 "$SUPERVISOR" --workspace "$PWD" --copilot-bin "$COPILOT
 if [ ${#PLUGIN_ARGS[@]:-0} -gt 0 ]; then
   for arg in "${PLUGIN_ARGS[@]}"; do supervisor_cmd+=(--plugin-arg "$arg"); done
 fi
+[ -n "$prepared_run_id" ] && supervisor_cmd+=(--target-run-id "$prepared_run_id")
+[ -z "$prepared_run_id" ] && [ "$subcmd" = "resume" ] && supervisor_cmd+=(--target-run-id "$payload_text")
 [ -n "$model" ] && supervisor_cmd+=(--explicit-model "$model")
 [ "$refresh_model_cache" -eq 1 ] && supervisor_cmd+=(--refresh-model-cache)
 

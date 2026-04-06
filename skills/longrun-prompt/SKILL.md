@@ -16,6 +16,7 @@ disable-model-invocation: false
 - goal
 - profile: `coding | research | office`
 - complexity: `single-lane | parallel | fleet`
+- termination mode: `complete-and-exit | checkpoint-and-stop | watch-until-deadline`
 - deliverables
 - constraints
 - language（默认跟随用户，中文优先）
@@ -50,11 +51,13 @@ disable-model-invocation: false
 生成的 prompt 必须体现：
 - 单入口 `/longrun`
 - 先任务画像，再规划执行
+- 先声明 `terminationMode`
 - 默认能力边界：本地文件 + shell + 公开网页
 - 默认不双语；仅在用户明确要求时双语
 - research / office：每个一级章节至少 2 个来源，文末 `## Sources Appendix`
 - coding：本地验证优先
 - deliverable 已完成时，优先 finalize，不要继续高成本验证
+- 只有 `terminationMode == complete-and-exit` 时，才允许 `task_complete`
 - 出现 rate limit 时，优先收尾或恢复，不要无意义 thrash
 
 ## 5. 推荐启动命令
@@ -83,4 +86,5 @@ copilot --autopilot --yolo --no-ask-user --model <当前账号可用的最新 Op
 必要时提醒：
 - raw `/longrun` 若在普通 Copilot session 内手动敲入，会继承当前 session 权限，不保证无确认弹窗
 - `longrun` / `copilot-longrun run` 才是更稳妥的无人值守入口
+- raw `/longrun` 默认更像“跑到完成就退出”，不是守护进程；若任务要持续监控 / checkpoint / watch，优先建议 launcher + detach
 - autopilot + yolo 有高自治权限，建议在隔离工作区使用

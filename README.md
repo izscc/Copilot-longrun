@@ -24,7 +24,7 @@ LongRun 不是“再写一个魔法 prompt”，也不是沉重的平台层。
 - **中间产物**：`artifacts/*.md`
 - **证据链**：`sources.jsonl`
 - **计划投影**：`plan.md` 顶部由 helper 维护 `LongRun Status Board`
-- **默认不接管**：`task-list.md` 仅在任务明确需要时 opt-in
+- **任务清单**：`task-list.md` 默认不作为真值源，但一旦存在且未标记 advisory，会进入 `complete` 校验
 - **自动恢复**：优先 `reconcile -> harvest_sources -> verify -> finalize`
 - **硬收敛**：helper 收尾写入 `COMPLETION.md`，并把 run 置为 `complete` 或 `blocked`
 - **默认命名**：用户可见输出文件默认使用简体中文名；控制文件保持英文稳定名
@@ -98,6 +98,14 @@ copilot-longrun      # 底层 launcher
 longrun "<任务描述>"
 ```
 
+`longrun` / `copilot-longrun run` 现在会在启动前：
+- 预分配一个新的时间戳 run-id（形如 `YYYYMMDD-HHMMSS-slug`）
+- 先创建 `.copilot-mission-control/runs/<run-id>/`
+- 写入 `state/active-run-id` 与 `state/latest-run-id`
+- 再把该 run-id 交给 Copilot LongRun skill 继续执行
+
+只有显式 `longrun-resume <run-id|latest>` 才会复用旧 run。
+
 ---
 
 ## vNext 内核亮点
@@ -145,6 +153,23 @@ longrun "<任务描述>"
 
 `plan.md` 只是默认受管投影；`task-list.md` 默认不是内核真值源。
 
+但从现在开始，若以下文件存在：
+
+```text
+task-list.md
+```
+
+且**没有**以下标记之一：
+
+```md
+<!-- LONGRUN:TASK-LIST:ADVISORY -->
+<!-- LONGRUN:TASK-LIST:UNMANAGED -->
+```
+
+那么它会被视为 `complete` 前的完成闸门：
+- 未勾选项默认表示任务未完成
+- `finalize_run.py --status complete --local-verify` 会因此失败
+
 ### 3. 受管 plan + 轻量漂移修复
 
 `plan.md` 顶部由 helper 维护唯一的 `LongRun Status Board`。  
@@ -154,6 +179,7 @@ longrun "<任务描述>"
 - run 已 finalize，但仍残留 `running`
 
 新增两个轻量 helper：
+- `prepare_run.py`
 - `harvest_sources.py`
 - `reconcile_run.py`
 
@@ -163,6 +189,7 @@ longrun "<任务描述>"
 
 LongRun 不再鼓励用脆弱的 shell `echo '{...}'` 写 JSON，而是通过 helper bundle 统一写状态：
 
+- `prepare_run.py`
 - `write_status.py`
 - `write_journal.py`
 - `record_source.py`
@@ -187,6 +214,67 @@ helper bundle 默认安装到：
 只有显式 `--force-complete` 才允许带风险完成，并会在 `status.json.verification` 中留下失败痕迹。
 
 helper 自己的收尾输出固定写到 `COMPLETION.md`，不再覆盖用户任务自己的 `final-summary.md`。
+
+### 5.5 `task_complete` 会让当前 Copilot session 正常结束
+
+LongRun 里要区分两件事：
+- `finalize_run.py`：把 run 收敛到 `complete / blocked`
+- `task_complete`：告诉 Copilot **当前 session 可以结束**
+
+因此，若你在 session 里看到：
+- 最后做了一轮 verify / scan
+- 随后写入 `finalize_run.py`
+- 再出现 `task_complete`
+- 最终 `sessionEnd.reason = complete`
+
+这通常是**正常自动收尾**，不是“突然崩掉”。
+
+### 5.6 launcher 现在强制“新任务 = 新 run-id”
+
+从现在开始：
+- `longrun "..."` / `copilot-longrun run ...` 会先预分配新 run
+- 新 run 默认不会再复用旧目录
+- 只有 `resume` 才允许继续旧 run
+
+这解决了这类问题：
+- 一次新任务意外写进旧的固定目录（例如 `icopilot-v1/`）
+- `latest` / `active` 指针和实际运行 run 混淆
+- 长跑 session 结束后，看不到新的 run 记录目录
+
+另外，若你把任务文件内容写成：
+
+```text
+/longrun ...
+```
+
+再传给 launcher：
+
+```bash
+longrun "$(cat task.md)"
+```
+
+launcher 会自动剥离最前面的那一个 `/longrun`，避免双重触发。
+
+默认结束语义是：
+- `complete-and-exit`：交付物完成后自动结束当前 session
+
+如果你要的是：
+- 持续监控
+- 保留 checkpoint 等你回来
+- watch 外部条件
+- 不希望当前 Copilot 会话自己结束
+
+则不要把任务写成单纯的 `complete-and-exit`，而应改成：
+- `checkpoint-and-stop`
+- `watch-until-deadline`
+
+并优先使用 detached launcher：
+
+```bash
+longrun "..."
+```
+
+而不是把 raw `/longrun` 当作守护进程。
 
 ### 6. 事件驱动的轻自适应
 
@@ -252,6 +340,10 @@ LongRun launcher 与 `/longrun` 共享统一模型策略：
   - `modelControlMode: session-inherited`
 
 也就是说：**raw `/longrun` 不会再假装自己强制用了 Opus 4.6。**
+
+另外：
+- raw `/longrun` 更像“一次 autonomous mission 跑到完成后退出”
+- detached launcher 更适合长时间无人值守、状态恢复、后续 resume
 
 ---
 
