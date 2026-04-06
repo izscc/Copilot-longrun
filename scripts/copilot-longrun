@@ -62,6 +62,29 @@ ok() { printf '[OK] %s\n' "$*"; }
 warn() { printf '[WARN] %s\n' "$*"; }
 fail() { printf '[FAIL] %s\n' "$*"; }
 
+COLOR_ENABLED=0
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != "dumb" ]; then
+  COLOR_ENABLED=1
+fi
+
+if [ "$COLOR_ENABLED" -eq 1 ]; then
+  CLR_RESET=$'\033[0m'
+  CLR_BOLD=$'\033[1m'
+  CLR_GOLD=$'\033[38;5;179m'
+  CLR_GOLD_SOFT=$'\033[38;5;144m'
+  CLR_GREEN=$'\033[38;5;114m'
+  CLR_CYAN=$'\033[38;5;117m'
+  CLR_GRAY=$'\033[38;5;245m'
+else
+  CLR_RESET=""
+  CLR_BOLD=""
+  CLR_GOLD=""
+  CLR_GOLD_SOFT=""
+  CLR_GREEN=""
+  CLR_CYAN=""
+  CLR_GRAY=""
+fi
+
 display_model_slug() {
   case "$1" in
     claude-opus-4.6) printf 'Claude Opus 4.6\n' ;;
@@ -330,6 +353,158 @@ path.write_text(json.dumps(obj, ensure_ascii=False, indent=2) + '\n', encoding='
 PY
 }
 
+display_path() {
+  python3 - "$1" "$PWD" "$HOME" <<'PY'
+import os, sys
+from pathlib import Path
+target = Path(sys.argv[1]).expanduser().resolve()
+cwd = Path(sys.argv[2]).expanduser().resolve()
+home = Path(sys.argv[3]).expanduser().resolve()
+try:
+    rel = target.relative_to(cwd)
+    print(str(rel).replace("\\", "/"))
+    raise SystemExit(0)
+except ValueError:
+    pass
+try:
+    rel = target.relative_to(home)
+    print(("~/" + str(rel)).replace("\\", "/"))
+    raise SystemExit(0)
+except ValueError:
+    pass
+print(str(target))
+PY
+}
+
+launch_board_label() {
+  case "$1" in
+    resume) printf '恢复看板\n' ;;
+    *) printf '启动看板\n' ;;
+  esac
+}
+
+launch_board_title() {
+  case "$1" in
+    resume) printf 'LongRun 已恢复到后台\n' ;;
+    *) printf 'LongRun 已后台启动\n' ;;
+  esac
+}
+
+write_launch_board_md() {
+  local board_file="$1" title="$2" board_label="$3" run_ref="$4" model_label="$5" pid="$6" screen_id="$7" log_file="$8" meta_file="$9" skill_mode="${10}"
+  local log_rel meta_rel board_rel
+  log_rel="$(display_path "$log_file")"
+  meta_rel="$(display_path "$meta_file")"
+  board_rel="$(display_path "$board_file")"
+  python3 - "$board_file" "$title" "$board_label" "$run_ref" "$model_label" "$pid" "$screen_id" "$log_rel" "$meta_rel" "$board_rel" "$PWD" "$skill_mode" <<'PY'
+from datetime import datetime
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+title = sys.argv[2]
+board_label = sys.argv[3]
+run_ref = sys.argv[4]
+model_label = sys.argv[5]
+pid = sys.argv[6]
+screen_id = sys.argv[7]
+log_rel = sys.argv[8]
+meta_rel = sys.argv[9]
+board_rel = sys.argv[10]
+workspace = sys.argv[11]
+skill_mode = sys.argv[12]
+now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+content = f"""# LongRun {board_label}
+
+> {title}。你现在可以关闭终端，LongRun 会继续在后台运行。
+
+## 当前任务
+
+- 任务编号：`{run_ref}`
+- 模型：`{model_label}`
+- 状态：`后台运行中`
+- 启动时间：`{now}`
+- 项目目录：`{workspace}`
+
+## 常用命令
+
+### 查看状态
+
+```bash
+longrun-status latest
+longrun-status "{run_ref}"
+```
+
+### 继续接力
+
+```bash
+longrun-resume latest
+longrun-resume "{run_ref}"
+```
+
+### 实时日志
+
+```bash
+tail -f {log_rel}
+```
+
+## 文件位置
+
+- 日志文件：`{log_rel}`
+- 元数据：`{meta_rel}`
+- 当前看板：`{board_rel}`
+
+## 新手提示
+
+- 先用 `longrun-status latest` 看当前状态。
+- 如果要继续接力，优先用 `longrun-resume latest`。
+- 如果你同时开了多个任务，再改用精确的 run-id 命令。
+
+<details>
+<summary>调试信息</summary>
+
+- 后台 PID：`{pid}`
+- Screen 会话：`{screen_id or "N/A"}`
+- Skill source：`{skill_mode}`
+
+</details>
+"""
+path.write_text(content, encoding="utf-8")
+PY
+}
+
+render_launch_dashboard() {
+  local subcommand="$1" run_ref="$2" selected_model="$3" pid="$4" log_file="$5" meta_file="$6" board_file="$7"
+  local title board_label model_label log_rel meta_rel board_rel
+  title="$(launch_board_title "$subcommand")"
+  board_label="$(launch_board_label "$subcommand")"
+  model_label="$(display_model_slug "$selected_model")"
+  log_rel="$(display_path "$log_file")"
+  meta_rel="$(display_path "$meta_file")"
+  board_rel="$(display_path "$board_file")"
+
+  printf '%b╭─ %s ─────────────────────────────%b\n' "$CLR_GOLD" "$title" "$CLR_RESET"
+  printf '%b│%b %b● 后台运行中%b\n' "$CLR_GOLD" "$CLR_RESET" "$CLR_GREEN" "$CLR_RESET"
+  printf '%b│%b 任务编号  %b%s%b\n' "$CLR_GOLD" "$CLR_RESET" "$CLR_BOLD$CLR_GOLD_SOFT" "$run_ref" "$CLR_RESET"
+  printf '%b│%b 模型      %s\n' "$CLR_GOLD" "$CLR_RESET" "$model_label"
+  printf '%b│%b 后台 PID  %s\n' "$CLR_GOLD" "$CLR_RESET" "$pid"
+  printf '%b│%b %s  %s\n' "$CLR_GOLD" "$CLR_RESET" "$board_label" "$board_rel"
+  printf '%b╰──────────────────────────────────────────────%b\n\n' "$CLR_GOLD" "$CLR_RESET"
+
+  printf '%b常用命令%b\n' "$CLR_GOLD_SOFT" "$CLR_RESET"
+  printf '  查看状态   %blongrun-status latest%b\n' "$CLR_CYAN" "$CLR_RESET"
+  printf '  继续接力   %blongrun-resume latest%b\n' "$CLR_CYAN" "$CLR_RESET"
+  printf '  实时日志   %btail -f %s%b\n\n' "$CLR_CYAN" "$log_rel" "$CLR_RESET"
+
+  printf '%b文件位置%b\n' "$CLR_GOLD_SOFT" "$CLR_RESET"
+  printf '  日志文件   %s\n' "$log_rel"
+  printf '  元数据     %s\n' "$meta_rel"
+  printf '  当前看板   %s\n\n' "$board_rel"
+
+  printf '%b提示：你现在可以关闭终端，LongRun 会继续在后台运行。%b\n' "$CLR_GRAY" "$CLR_RESET"
+}
+
 screen_quote_for_rc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 
 find_screen_session_id() {
@@ -343,9 +518,9 @@ find_screen_session_id() {
 }
 
 launch_detached_via_screen() {
-  local subcommand="$1" payload="$2" log_file="$3" meta_file="$4" ts="$5" selected_model="$6"
-  shift 6
-  local screen_bin session_name screen_rc_file screen_id pid shell_cmd
+  local subcommand="$1" payload="$2" log_file="$3" meta_file="$4" ts="$5" selected_model="$6" run_ref="$7"
+  shift 7
+  local screen_bin session_name screen_rc_file screen_id pid shell_cmd board_file safe_run_ref board_label title model_label
   screen_bin="$(screen_path || true)"
   [ -n "$screen_bin" ] || die "Detached mode requires screen. Install it first or run without --detach."
   session_name="copilot-longrun-${subcommand}-${ts}"
@@ -357,14 +532,11 @@ launch_detached_via_screen() {
   pid="${screen_id%%.*}"
   [ -n "$pid" ] || pid=0
   write_meta "$meta_file" "$subcommand" "$payload" "$log_file" "$pid" "$SKILL_MODE" "screen" "$(shell_join "$@")" "$selected_model"
-  printf 'Launched detached Copilot LongRun process.\n'
-  printf 'PID: %s\n' "$pid"
-  [ -n "$screen_id" ] && printf 'Screen session: %s\n' "$screen_id"
-  printf 'Skill source: %s\n' "$SKILL_MODE"
-  printf 'Selected model: %s\n' "$selected_model"
-  printf 'Log: %s\n' "$log_file"
-  printf 'Meta: %s\n' "$meta_file"
-  printf 'Follow log: tail -f %s\n' "$log_file"
+  safe_run_ref="$(printf '%s' "${run_ref:-$ts}" | tr -cs 'A-Za-z0-9._-' '-')"
+  board_label="$(launch_board_label "$subcommand")"
+  board_file="$PWD/LONGRUN-${board_label%$'\n'}-${safe_run_ref}.md"
+  write_launch_board_md "$board_file" "$(launch_board_title "$subcommand")" "${board_label%$'\n'}" "${run_ref:-$ts}" "$(display_model_slug "$selected_model")" "$pid" "$screen_id" "$log_file" "$meta_file" "$SKILL_MODE"
+  render_launch_dashboard "$subcommand" "${run_ref:-$ts}" "$selected_model" "$pid" "$log_file" "$meta_file" "$board_file"
 }
 
 SKILL_MODE=""
@@ -581,7 +753,6 @@ if [ "$subcmd" = "run" ]; then
     [ -n "$model" ] && prepare_cmd+=(--explicit-model "$model")
     prepared_json="$("${prepare_cmd[@]}")" || die "failed to prepare fresh LongRun run"
     prepared_run_id="$(printf '%s' "$prepared_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["runId"])')"
-    info "Prepared LongRun run-id: $prepared_run_id"
   fi
 fi
 
@@ -619,7 +790,8 @@ if [ "$detach" -eq 1 ]; then
   ts="$(date +%Y%m%d-%H%M%S)"
   log_file="$launcher_dir/${subcmd}-${ts}.log"
   meta_file="$launcher_dir/${subcmd}-${ts}.json"
-  launch_detached_via_screen "$subcmd" "$payload_text" "$log_file" "$meta_file" "$ts" "$selected_model" "${supervisor_cmd[@]}"
+  launch_run_ref="${prepared_run_id:-$payload_text}"
+  launch_detached_via_screen "$subcmd" "$payload_text" "$log_file" "$meta_file" "$ts" "$selected_model" "$launch_run_ref" "${supervisor_cmd[@]}"
   exit 0
 fi
 
