@@ -34,7 +34,7 @@ for cmd in longrun longrun-prompt longrun-resume longrun-status; do
   remove_path "$CLAUDE_DIR/$cmd.md"
 done
 
-for helper in _longrun_lib.py prepare_run.py notify_macos.py write_journal.py write_status.py record_source.py harvest_sources.py reconcile_run.py finalize_run.py hook_event.py selftest_longrun.py launch_supervisor.py model_policy_info.py update_plan_md.py verify_run.py probe_models.py; do
+for helper in _longrun_lib.py prepare_run.py notify_macos.py prompt_output_packager.py write_journal.py write_status.py record_source.py harvest_sources.py reconcile_run.py finalize_run.py hook_event.py selftest_longrun.py launch_supervisor.py model_policy_info.py update_plan_md.py verify_run.py probe_models.py; do
   remove_path "$LONGRUN_HOME/bin/$helper"
 done
 

@@ -1,7 +1,7 @@
 {
   "name": "copilot-mission-control",
   "description": "LongRun turns GitHub Copilot CLI into a resumable long-running mission backend with task profiling, atomic state, Opus-first model routing, and cross-agent launchers.",
-  "version": "0.9.5",
+  "version": "0.9.6",
   "author": {
     "name": "zscc.in",
     "url": "https://github.com/zscc"

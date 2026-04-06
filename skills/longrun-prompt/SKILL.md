@@ -40,8 +40,8 @@ disable-model-invocation: false
 1. 任务分析摘要
 2. 画像与复杂度判定
 3. 模板选择
-4. 可复制 Prompt
-5. 推荐启动命令
+4. `## 可直接执行 Prompt`
+5. `## 推荐启动命令`
 6. 注意事项
 
 如果用户只要 prompt，可省略 1/2/5/6。
@@ -59,6 +59,13 @@ disable-model-invocation: false
 - deliverable 已完成时，优先 finalize，不要继续高成本验证
 - 只有 `terminationMode == complete-and-exit` 时，才允许 `task_complete`
 - 出现 rate limit 时，优先收尾或恢复，不要无意义 thrash
+
+另外必须满足下面的格式约束，便于 launcher 自动整理成本地文件：
+
+- `## 可直接执行 Prompt` 下面必须紧跟一个 fenced code block
+- 这个 code block 里只放 **Prompt 正文**，不要把分析摘要、注意事项、命令说明混进去
+- `## 推荐启动命令` 下面必须紧跟一个 fenced `bash` code block
+- 如果还要输出其他补充说明，放在这两个区块之外
 
 ## 5. 推荐启动命令
 

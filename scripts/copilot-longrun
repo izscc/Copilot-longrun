@@ -515,6 +515,41 @@ render_launch_dashboard() {
   printf '%b提示：你现在可以关闭终端，LongRun 会继续在后台运行。%b\n' "$CLR_GRAY" "$CLR_RESET"
 }
 
+render_prompt_dashboard() {
+  local selected_model="$1" prompt_file="$2" guide_file="$3" execute_cmd="$4" opened="$5" copied="$6"
+  local prompt_rel guide_rel model_label status_text clipboard_text
+  prompt_rel="$(display_path "$prompt_file")"
+  guide_rel="$(display_path "$guide_file")"
+  model_label="$(display_model_slug "$selected_model")"
+  if [ "$opened" = "1" ]; then
+    status_text="已自动打开主文件"
+  else
+    status_text="已生成，待你打开"
+  fi
+  if [ "$copied" = "1" ]; then
+    clipboard_text="已把执行命令复制到剪贴板。"
+  else
+    clipboard_text="你可以直接复制下面这条命令执行。"
+  fi
+
+  printf '%b╭─ LongRun Prompt 已生成 ────────────────────%b\n' "$CLR_GOLD" "$CLR_RESET"
+  printf '%b│%b %b● 可直接修改后执行%b\n' "$CLR_GOLD" "$CLR_RESET" "$CLR_GREEN" "$CLR_RESET"
+  printf '%b│%b 主文件     %s\n' "$CLR_GOLD" "$CLR_RESET" "$prompt_rel"
+  printf '%b│%b 说明文件   %s\n' "$CLR_GOLD" "$CLR_RESET" "$guide_rel"
+  printf '%b│%b 模型       %s\n' "$CLR_GOLD" "$CLR_RESET" "$model_label"
+  printf '%b│%b 状态       %s\n' "$CLR_GOLD" "$CLR_RESET" "$status_text"
+  printf '%b╰──────────────────────────────────────────────%b\n\n' "$CLR_GOLD" "$CLR_RESET"
+
+  printf '%b推荐执行命令%b\n' "$CLR_GOLD_SOFT" "$CLR_RESET"
+  printf '  %b%s%b\n\n' "$CLR_CYAN" "$execute_cmd" "$CLR_RESET"
+
+  printf '%b文件位置%b\n' "$CLR_GOLD_SOFT" "$CLR_RESET"
+  printf '  主文件     %s\n' "$prompt_rel"
+  printf '  说明文件   %s\n\n' "$guide_rel"
+
+  printf '%b提示：%s 你可以先修改 Prompt 文件，再执行上面的命令。%b\n' "$CLR_GRAY" "$clipboard_text" "$CLR_RESET"
+}
+
 send_launch_notification() {
   local subcommand="$1" run_ref="$2" board_file="$3"
   local helper event title subtitle message
@@ -543,6 +578,26 @@ send_launch_notification() {
     --message "$message" \
     --open "$board_file" \
     >/dev/null 2>&1 || true
+}
+
+package_prompt_output() {
+  local captured_file="$1" payload_text="$2" selected_model="$3"
+  local helper output_json
+  helper="$(helper_path prompt_output_packager.py || true)"
+  [ -n "$helper" ] || die "prompt output packager missing. Run bash $REPO_ROOT/scripts/install-bare-commands.sh"
+  output_json="$(python3 "$helper" \
+    --workspace "$PWD" \
+    --captured-output "$captured_file" \
+    --task "$payload_text" \
+    --model "$(display_model_slug "$selected_model")" \
+    --auto-open \
+    --copy-command)" || die "failed to package generated prompt artifacts"
+  python3 - "$output_json" <<'PY'
+import json, sys
+obj = json.loads(sys.argv[1])
+for key in ("promptFile", "guideFile", "executeCommand", "opened", "copiedToClipboard"):
+    print(obj.get(key, ""))
+PY
 }
 
 screen_quote_for_rc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
@@ -864,6 +919,34 @@ if [ "$dry_run" -eq 1 ]; then
   fi
   actual_cmd+=(--model "$selected_model" -p "$skill_ref $payload_text")
   shell_join "${actual_cmd[@]}"
+  exit 0
+fi
+
+if [ "$subcmd" = "prompt" ]; then
+  captured_output_file="$(mktemp "${TMPDIR:-/tmp}/longrun-prompt-output.XXXXXX")"
+  set +e
+  "${supervisor_cmd[@]}" | tee "$captured_output_file"
+  rc=${PIPESTATUS[0]}
+  set -e
+  [ "$rc" -eq 0 ] || { rm -f "$captured_output_file"; exit "$rc"; }
+  packaged_info=()
+  while IFS= read -r line; do
+    packaged_info+=("$line")
+  done < <(package_prompt_output "$captured_output_file" "$payload_text" "$selected_model")
+  rm -f "$captured_output_file"
+  prompt_file="${packaged_info[0]:-}"
+  guide_file="${packaged_info[1]:-}"
+  execute_cmd="${packaged_info[2]:-}"
+  opened_flag=0
+  copied_flag=0
+  if [ "${packaged_info[3]:-}" = "True" ] || [ "${packaged_info[3]:-}" = "true" ] || [ "${packaged_info[3]:-}" = "1" ]; then
+    opened_flag=1
+  fi
+  if [ "${packaged_info[4]:-}" = "True" ] || [ "${packaged_info[4]:-}" = "true" ] || [ "${packaged_info[4]:-}" = "1" ]; then
+    copied_flag=1
+  fi
+  printf '\n'
+  render_prompt_dashboard "$selected_model" "$prompt_file" "$guide_file" "$execute_cmd" "$opened_flag" "$copied_flag"
   exit 0
 fi
 

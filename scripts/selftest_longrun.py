@@ -110,6 +110,49 @@ def test_notify_helper_dry_run(temp_root: Path) -> None:
     assert complete_result["backend"] in {"terminal-notifier", "osascript", "none"}
 
 
+def test_prompt_output_packager(temp_root: Path) -> None:
+    workspace = temp_root / "prompt-workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    captured = workspace / "captured.txt"
+    captured.write_text(
+        """[LongRun] attempt 1/1 with model: Claude Opus 4.6 (claude-opus-4.6)
+## 任务分析摘要
+- coding
+
+## 可直接执行 Prompt
+```markdown
+你是 Copilot Autonomous Executor。
+
+## Mission
+- Goal: 修复登录流程
+```
+
+## 推荐启动命令
+```bash
+longrun "修复登录流程"
+```
+""",
+        encoding="utf-8",
+    )
+    packaged = run_cmd(
+        str(SCRIPT_DIR / "prompt_output_packager.py"),
+        "--workspace", str(workspace),
+        "--captured-output", str(captured),
+        "--task", "修复登录流程",
+        "--model", "Claude Opus 4.6",
+    )
+    result = json.loads(packaged.stdout)
+    prompt_file = Path(result["promptFile"])
+    guide_file = Path(result["guideFile"])
+    assert prompt_file.exists()
+    assert guide_file.exists()
+    assert "你是 Copilot Autonomous Executor。" in read_text(prompt_file, "")
+    guide_text = read_text(guide_file, "")
+    assert "待执行 Prompt 使用说明" in guide_text
+    assert 'longrun "$(cat ' in guide_text
+    assert result["extractMode"] == "section-fence"
+
+
 def test_finalize_gate_and_force_complete(temp_root: Path) -> None:
     workspace, run_dir, state_dir = setup_run(temp_root, "gate-workspace", "20990101-000001-gate")
     reports_dir = workspace / "reports"

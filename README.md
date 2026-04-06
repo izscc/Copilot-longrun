@@ -130,6 +130,13 @@ longrun-doctor
 copilot-longrun      # 兼容 / 高级入口
 ```
 
+`longrun-prompt "<任务描述>"` 除了在终端输出 Prompt，还会在当前目录自动生成：
+
+- `待执行 Prompt.md`
+- `待执行 Prompt 使用说明.md`
+
+并且会自动打开主 Prompt 文件，方便你直接查看、修改，再复制终端最后那条执行命令继续使用。
+
 最推荐的入口是：
 
 ```bash
