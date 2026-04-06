@@ -134,6 +134,26 @@ def patch_recovery_hint(workspace: Path, *, run_ref: str | None = None, message:
     write_json_atomic(status_file, status)
 
 
+def notify_event(workspace: Path, run_ref: str | None, event: str, *, title: str, subtitle: str, message: str, sound: bool = False) -> None:
+    helper = SCRIPT_DIR / "notify_macos.py"
+    if not helper.exists():
+        return
+    cmd = [
+        sys.executable,
+        str(helper),
+        "--workspace", str(workspace),
+        "--event", event,
+        "--title", title,
+        "--subtitle", subtitle,
+        "--message", message,
+    ]
+    if run_ref:
+        cmd.extend(["--run-id", run_ref])
+    if sound:
+        cmd.append("--sound")
+    subprocess.run(cmd, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 def auto_finalize_if_possible(workspace: Path, note: str, run_ref: str | None = None) -> bool:
     target = resolve_managed_target(workspace, run_ref)
     if target is None:
@@ -269,10 +289,28 @@ def main() -> int:
         if not fallback_reason:
             failure_class, recommended = classify_failure(last_error=output)
             patch_recovery_hint(workspace, run_ref=managed_run_ref, message="launcher run failed without model fallback", failure_class=failure_class, recommended_action=recommended)
+            notify_event(
+                workspace,
+                managed_run_ref,
+                "attention",
+                title="LongRun 需要你回来看看",
+                subtitle="有一项检查没有通过",
+                message="任务还在，当前进度也已经保留下来了。",
+                sound=True,
+            )
             return rc or 1
         _, recommended = classify_failure(last_error=fallback_reason)
         patch_recovery_hint(workspace, run_ref=managed_run_ref, message=fallback_reason, failure_class=fallback_reason.replace("-", "_"), recommended_action=recommended)
         patch_latest_run(workspace, run_ref=managed_run_ref, selected_model=model, fallback_reason=fallback_reason)
+        if index == 0:
+            notify_event(
+                workspace,
+                managed_run_ref,
+                "recovery",
+                title="LongRun 正在自己换路继续",
+                subtitle="刚才那一步没有走通",
+                message="现在先不用守着，LongRun 还在继续处理。",
+            )
         if args.mode in {"run", "resume"} and args.resume_skill_ref:
             current_skill = args.resume_skill_ref
             current_payload = managed_target.run_id if managed_target else "latest"

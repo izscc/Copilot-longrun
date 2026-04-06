@@ -82,6 +82,34 @@ def test_prepare_run_allocates_fresh_timestamped_runs(temp_root: Path) -> None:
     assert second_status.get("selectedModel") == "claude-opus-4.6"
 
 
+def test_notify_helper_dry_run(temp_root: Path) -> None:
+    workspace, run_dir, _state_dir = setup_run(temp_root, "notify-workspace", "20990101-000004-notify")
+    board = workspace / f"LONGRUN-启动看板-{run_dir.name}.md"
+    board.write_text("# LongRun 启动看板\n", encoding="utf-8")
+    completion = run_dir / "COMPLETION.md"
+    completion.write_text("# done\n", encoding="utf-8")
+
+    launched = run_cmd(
+        str(SCRIPT_DIR / "notify_macos.py"),
+        "--workspace", str(workspace),
+        "--run-id", run_dir.name,
+        "--event", "launched",
+        "--dry-run",
+    )
+    launched_result = json.loads(launched.stdout)
+    assert launched_result["backend"] in {"terminal-notifier", "osascript", "none"}
+
+    complete = run_cmd(
+        str(SCRIPT_DIR / "notify_macos.py"),
+        "--workspace", str(workspace),
+        "--run-id", run_dir.name,
+        "--event", "complete",
+        "--dry-run",
+    )
+    complete_result = json.loads(complete.stdout)
+    assert complete_result["backend"] in {"terminal-notifier", "osascript", "none"}
+
+
 def test_finalize_gate_and_force_complete(temp_root: Path) -> None:
     workspace, run_dir, state_dir = setup_run(temp_root, "gate-workspace", "20990101-000001-gate")
     reports_dir = workspace / "reports"
@@ -314,6 +342,7 @@ def main() -> int:
     temp_root = Path(tempfile.mkdtemp(prefix="longrun-selftest-"))
     try:
         test_prepare_run_allocates_fresh_timestamped_runs(temp_root)
+        test_notify_helper_dry_run(temp_root)
         test_finalize_gate_and_force_complete(temp_root)
         test_complete_requires_deliverables_and_task_list(temp_root)
         test_reconcile_harvest_and_naming(temp_root)

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -70,6 +71,27 @@ def build_completion_markdown(headline: str, status_name: str, delivered: list[s
     if evidence_file and evidence_file.exists():
         lines.extend(["", "## Evidence Trail", f"- `sources.jsonl`: `{evidence_file}`"])
     return "\n".join(lines) + "\n"
+
+
+def notify(run_target, event: str, *, title: str, subtitle: str, message: str, open_path: Path | None = None, sound: bool = False) -> None:
+    helper = SCRIPT_DIR / "notify_macos.py"
+    if not helper.exists():
+        return
+    cmd = [
+        sys.executable,
+        str(helper),
+        "--workspace", str(run_target.workspace),
+        "--run-id", run_target.run_id,
+        "--event", event,
+        "--title", title,
+        "--subtitle", subtitle,
+        "--message", message,
+    ]
+    if open_path:
+        cmd.extend(["--open", str(open_path)])
+    if sound:
+        cmd.append("--sound")
+    subprocess.run(cmd, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def main() -> int:
@@ -145,6 +167,14 @@ def main() -> int:
         failed["updatedAt"] = now_iso()
         write_json_atomic(status_file, failed)
         sync_plan_markdown(target, failed)
+        notify(
+            target,
+            "attention",
+            title="LongRun 需要你回来看看",
+            subtitle="有一项检查没有通过",
+            message="任务还在，当前进度也已经保留下来了。",
+            sound=True,
+        )
         if args.do_print:
             print(json.dumps(failed, ensure_ascii=False, indent=2))
         return 1
@@ -190,6 +220,27 @@ def main() -> int:
     write_json_atomic(status_file, updated)
     sync_plan_markdown(target, updated)
     clear_active_run_if_matches(target)
+    completion_file = completion_path(target)
+    if args.status == "complete":
+        notify(
+            target,
+            "complete",
+            title="LongRun 已经完成了",
+            subtitle="结果已经整理好了",
+            message="点一下就能打开结果摘要。",
+            open_path=completion_file if completion_file.exists() else None,
+            sound=True,
+        )
+    else:
+        notify(
+            target,
+            "blocked",
+            title="LongRun 暂时停住了",
+            subtitle="需要你补一个决定或输入",
+            message="点一下查看当前情况，再决定下一步。",
+            open_path=completion_file if completion_file.exists() else None,
+            sound=True,
+        )
     if args.do_print:
         print(json.dumps(updated, ensure_ascii=False, indent=2))
     return 0

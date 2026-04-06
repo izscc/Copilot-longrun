@@ -170,6 +170,8 @@ helper_path() {
   return 1
 }
 
+terminal_notifier_path() { find_bin terminal-notifier || find_bin_from_common_locations terminal-notifier; }
+
 ensure_model_config_path() {
   if [ -f "$MODEL_CONFIG_PATH_DEFAULT" ]; then
     MODEL_CONFIG_PATH="$MODEL_CONFIG_PATH_DEFAULT"
@@ -505,6 +507,36 @@ render_launch_dashboard() {
   printf '%b提示：你现在可以关闭终端，LongRun 会继续在后台运行。%b\n' "$CLR_GRAY" "$CLR_RESET"
 }
 
+send_launch_notification() {
+  local subcommand="$1" run_ref="$2" board_file="$3"
+  local helper event title subtitle message
+  helper="$(helper_path notify_macos.py || true)"
+  [ -n "$helper" ] || return 0
+  case "$subcommand" in
+    resume)
+      event="resumed"
+      title="LongRun 已经接着跑起来了"
+      subtitle="任务正在后台继续进行"
+      message="你现在可以先去忙别的，LongRun 会继续往前推进。"
+      ;;
+    *)
+      event="launched"
+      title="LongRun 已经开始了"
+      subtitle="任务正在后台继续进行"
+      message="你现在可以关掉终端，稍后回来再看进度。"
+      ;;
+  esac
+  python3 "$helper" \
+    --workspace "$PWD" \
+    --run-id "$run_ref" \
+    --event "$event" \
+    --title "$title" \
+    --subtitle "$subtitle" \
+    --message "$message" \
+    --open "$board_file" \
+    >/dev/null 2>&1 || true
+}
+
 screen_quote_for_rc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 
 find_screen_session_id() {
@@ -537,6 +569,7 @@ launch_detached_via_screen() {
   board_file="$PWD/LONGRUN-${board_label%$'\n'}-${safe_run_ref}.md"
   write_launch_board_md "$board_file" "$(launch_board_title "$subcommand")" "${board_label%$'\n'}" "${run_ref:-$ts}" "$(display_model_slug "$selected_model")" "$pid" "$screen_id" "$log_file" "$meta_file" "$SKILL_MODE"
   render_launch_dashboard "$subcommand" "${run_ref:-$ts}" "$selected_model" "$pid" "$log_file" "$meta_file" "$board_file"
+  send_launch_notification "$subcommand" "${run_ref:-$ts}" "$board_file"
 }
 
 SKILL_MODE=""
@@ -589,6 +622,8 @@ doctor() {
   local helper_selftest="$(helper_path selftest_longrun.py || true)"
   local helper_model_info="$(helper_path model_policy_info.py || true)"
   local helper_probe_models="$(helper_path probe_models.py || true)"
+  local helper_notify="$(helper_path notify_macos.py || true)"
+  local mac_notifier="$(terminal_notifier_path || true)"
   cat <<'BANNER'
 LongRun 让你的Copilot Pro权益得到最大化的价值呈现！
 开发者：zscc.in 知识船仓·公益社区。
@@ -633,6 +668,14 @@ BANNER
   if [ -n "$installed_plugin" ]; then ok "Copilot CLI 已安装插件缓存：$installed_plugin"; else warn "Copilot CLI 未检测到已安装插件缓存"; info "     安装：$(plugin_install_hint)"; fi
   if [ -x "$HOME/.local/bin/copilot-longrun" ]; then ok "全局 launcher 已安装：$HOME/.local/bin/copilot-longrun"; else warn "全局 launcher 未安装"; info "     安装：bash $REPO_ROOT/scripts/install-global-launcher.sh"; fi
   if [ -n "$screen_bin" ]; then ok "Detached PTY backend 已安装：$screen_bin"; else fail "未找到 detached 所需的 screen"; issues=$((issues + 1)); fi
+  if [ "$(uname -s)" = "Darwin" ]; then
+    if [ -n "$mac_notifier" ]; then
+      ok "增强通知已就绪：$mac_notifier"
+    elif [ -n "$helper_notify" ]; then
+      warn "未找到 terminal-notifier，LongRun 会退回基础 macOS 通知"
+      info "     如已安装 Homebrew，可执行：brew install terminal-notifier"
+    fi
+  fi
   if [ -n "$gh_bin" ]; then
     ok "GitHub CLI 已安装：$gh_bin"
     if [ -n "$gh_login" ]; then ok "GitHub CLI 已登录：$gh_login"; else warn "GitHub CLI 尚未登录（仅 push/PR/仓库管理需要）"; fi
